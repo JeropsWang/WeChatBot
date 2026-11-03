@@ -1,5 +1,11 @@
 import {afterAll,beforeAll,describe,expect,it,vi} from 'vitest';
 import {randomUUID} from 'node:crypto';
+// 生命周期测试模拟 Windows 进程树；不要求 Linux CI 安装桌面桥接可执行文件。
+const actualPlatform=process.platform;
+vi.mock('node:fs/promises',async original=>{
+ const actual=await original<any>();
+ return {...actual,access:async(path:any,...args:any[])=>String(path).replaceAll('\\','/').endsWith('/.venv/Scripts/python.exe')?undefined:actual.access(path,...args)};
+});
 const fixture=vi.hoisted(()=>({children:[] as any[],spawns:[] as any[],kills:[] as any[]}));
 vi.mock('node:child_process',async original=>{
   const actual=await original<any>();const {EventEmitter}=await import('node:events');
@@ -17,13 +23,17 @@ import {Database} from '../apps/server/db.js';
 describe.skipIf(!process.env.TEST_DATABASE_URL)('explicit bridge compatibility lifecycle',()=>{
   let runtime:Awaited<ReturnType<typeof createApp>>,cookie:string,bootstrap:Database,schema:string;
   beforeAll(async()=>{
+    Object.defineProperty(process,'platform',{value:'win32',configurable:true});
     const url=new URL(process.env.TEST_DATABASE_URL!);if(url.pathname!=='/liino_test')throw new Error('Requires liino_test');
     schema='bridge_api_'+randomUUID().replaceAll('-','');bootstrap=new Database(url.href);await bootstrap.query('CREATE SCHEMA '+schema);
     url.searchParams.set('options','-c search_path='+schema+',public');
     runtime=await createApp({databaseUrl:url.href,dataDir:'artifacts/bridge-api-'+randomUUID(),startWorkers:false});
     const response=await runtime.app.inject({method:'POST',url:'/api/setup',payload:{password:'bridge-fixture-password-only'}});cookie=response.cookies.map(c=>`${c.name}=${c.value}`).join('; ');
   });
-  afterAll(async()=>{await runtime.app.close();await bootstrap.query('DROP SCHEMA '+schema+' CASCADE');await bootstrap.close();});
+  afterAll(async()=>{
+    try{await runtime?.app.close();if(bootstrap){await bootstrap.query('DROP SCHEMA '+schema+' CASCADE');await bootstrap.close();}}
+    finally{Object.defineProperty(process,'platform',{value:actualPlatform,configurable:true});}
+  });
   it('rejects a non-boolean consent before spawning anything',async()=>{
     const response=await runtime.app.inject({method:'POST',url:'/api/bridge/start',headers:{cookie},payload:{compatibility:'yes'}});
     expect(response.statusCode).toBe(400);expect(fixture.spawns).toHaveLength(0);

@@ -37,7 +37,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      # 图库输入校验使用真实 Pillow；不安装 torch、不下载模型权重。
+      # 附件解码/转盘使用核心环境，图库使用独立图像环境；均真实执行 Pillow。
+      # 不安装 Windows 桌面桥接、torch 或模型权重，CI 不启动微信。
+      - run: python -m venv .venv
+      - run: .venv/bin/python -m pip install pillow==13.0.0
       - run: python -m venv .venv-image-match
       - run: .venv-image-match/bin/python -m pip install pillow==13.0.0
       - run: npm test
