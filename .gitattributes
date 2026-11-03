@@ -1,0 +1,4 @@
+# 一致换行使跨平台格式检查不产生整文件差异。
+* text=auto eol=lf
+*.png binary
+*.ttf binary

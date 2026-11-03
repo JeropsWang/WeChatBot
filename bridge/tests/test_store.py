@@ -53,7 +53,9 @@ class BridgeStoreTests(unittest.TestCase):
                 self.assertFalse(store.begin_send('c1', 'different-target-or-text'))
                 self.assertEqual(store.send_result('c1')['status'], 'not_sent')
                 with ThreadPoolExecutor(max_workers=6) as pool:
-                    claimed = list(pool.map(lambda _: store.begin_send('c1', 'same-target-and-text'), range(6)))
+                    claimed = list(
+                        pool.map(lambda _: store.begin_send('c1', 'same-target-and-text'), range(6))
+                    )
                 self.assertEqual(claimed.count(True), 1)
                 self.assertEqual(store.send_result('c1')['status'], 'executing')
                 self.assertFalse(store.begin_send('c1', 'same-target-and-text'))

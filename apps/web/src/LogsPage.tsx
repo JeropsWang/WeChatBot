@@ -1,45 +1,456 @@
 /** 运行日志与发送结果。待核查表示结果不确定，不能自动当作失败重发；只展示服务端确认的状态。 */
 import { useState } from 'react';
-import { ArrowClockwise, ArrowCounterClockwise, CheckCircle, XCircle, PaperPlaneTilt, ClockCounterClockwise } from '@phosphor-icons/react';
+import {
+  ArrowClockwise,
+  ArrowCounterClockwise,
+  CheckCircle,
+  XCircle,
+  PaperPlaneTilt,
+  ClockCounterClockwise,
+} from '@phosphor-icons/react';
 import { api, dateTime, useAction, useResource, queryString, type PageResult } from './api';
-import { Badge, Button, Confirm, Empty, Feedback, Notice, PageHeading, ResourceState, Pagination } from './ui';
-const states: Record<string, string> = { pending: '等待中', running: '执行中', retrying: '重试中', failed: '失败', unknown: '结果未知', completed: '已完成', cancelled: '已取消', sent: '已发送', not_sent: '未发送', info: '信息', warn: '警告', error: '错误', debug: '调试' };
-const kinds: Record<string, string> = { chat: '群消息处理', proactive: '主动参与', send: '微信发送', memory: '记忆提取', 'memory-compact': 'Agent 记忆整合', index: '资料索引', 'admin-test': '群聊测试' };
-interface Task { id: string; kind: string; state: string; chat_name?: string; error?: string; created_at: string; updated_at?: string; delivery_status?: string; observation_state?: string; result?: {status?: string; reason?: string; reply?: string; decision?: string} }
-const wasSkipped=(task:Task)=>task.result?.status==='skipped'||task.kind==='chat'&&task.observation_state==='observed'&&!task.delivery_status;
-function taskLabel(task:Task){
-  if(task.state==='failed'||task.state==='cancelled')return states[task.state];
-  if(task.delivery_status==='sent')return '微信已发送';
-  if(task.delivery_status==='unknown'||task.state==='unknown')return '发送待核查';
-  if(wasSkipped(task))return task.result?.reason?'已跳过':'仅记录，未回复';
-  if(task.delivery_status==='pending'||task.delivery_status==='sending')return task.kind==='send'?'等待微信发送':'回复已生成，待发送';
-  return task.kind==='chat'&&task.state==='completed'?'处理结束，未确认发送':states[task.state]||task.state;
+import {
+  Badge,
+  Button,
+  Confirm,
+  Empty,
+  Feedback,
+  Notice,
+  PageHeading,
+  ResourceState,
+  Pagination,
+} from './ui';
+const states: Record<string, string> = {
+  pending: '等待中',
+  running: '执行中',
+  retrying: '重试中',
+  failed: '失败',
+  unknown: '结果未知',
+  completed: '已完成',
+  cancelled: '已取消',
+  sent: '已发送',
+  not_sent: '未发送',
+  info: '信息',
+  warn: '警告',
+  error: '错误',
+  debug: '调试',
+};
+const kinds: Record<string, string> = {
+  chat: '群消息处理',
+  proactive: '主动参与',
+  send: '微信发送',
+  memory: '记忆提取',
+  'memory-compact': 'Agent 记忆整合',
+  index: '资料索引',
+  'admin-test': '群聊测试',
+};
+interface Task {
+  id: string;
+  kind: string;
+  state: string;
+  chat_name?: string;
+  error?: string;
+  created_at: string;
+  updated_at?: string;
+  delivery_status?: string;
+  observation_state?: string;
+  result?: { status?: string; reason?: string; reply?: string; decision?: string };
 }
-interface Send { id: string; status: string; content: string; detail?: string; chat_name?: string; kind: string; created_at: string }
-interface Log { id: string; level: string; message: string; metadata?: unknown; created_at: string }
-export function LogsPage({ revision, refresh }: { revision: number; refresh: () => Promise<void> }) {
-  const [tab, setTab] = useState('tasks'), action = useAction();
-  return <main className="standard-page" id="main-content"><PageHeading title="运行记录" description="查看任务、实际发送结果与服务记录，需要时再核查处理。" action={<Button busy={action.busy} onClick={() => action.run(refresh)}><ArrowClockwise size={18} />刷新记录</Button>} /><Feedback error={action.error} /><div className="tabs" role="tablist" aria-label="运行记录">{[['tasks', '任务记录'], ['sends', '发送记录'], ['logs', '服务日志']].map(([id, label]) => <button role="tab" key={id} id={`tab-${id}`} aria-selected={tab === id} aria-controls={`panel-${id}`} onClick={() => setTab(id)}>{label}</button>)}</div><div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>{tab === 'tasks' && <Tasks revision={revision} refresh={refresh} />}{tab === 'sends' && <Sends revision={revision} refresh={refresh} />}{tab === 'logs' && <RuntimeLogs revision={revision} />}</div></main>;
+const wasSkipped = (task: Task) =>
+  task.result?.status === 'skipped' ||
+  (task.kind === 'chat' && task.observation_state === 'observed' && !task.delivery_status);
+function taskLabel(task: Task) {
+  if (task.state === 'failed' || task.state === 'cancelled') return states[task.state];
+  if (task.delivery_status === 'sent') return '微信已发送';
+  if (task.delivery_status === 'unknown' || task.state === 'unknown') return '发送待核查';
+  if (wasSkipped(task)) return task.result?.reason ? '已跳过' : '仅记录，未回复';
+  if (task.delivery_status === 'pending' || task.delivery_status === 'sending')
+    return task.kind === 'send' ? '等待微信发送' : '回复已生成，待发送';
+  return task.kind === 'chat' && task.state === 'completed'
+    ? '处理结束，未确认发送'
+    : states[task.state] || task.state;
+}
+interface Send {
+  id: string;
+  status: string;
+  content: string;
+  detail?: string;
+  chat_name?: string;
+  kind: string;
+  created_at: string;
+}
+interface Log {
+  id: string;
+  level: string;
+  message: string;
+  metadata?: unknown;
+  created_at: string;
+}
+export function LogsPage({
+  revision,
+  refresh,
+}: {
+  revision: number;
+  refresh: () => Promise<void>;
+}) {
+  const [tab, setTab] = useState('tasks'),
+    action = useAction();
+  return (
+    <main className="standard-page" id="main-content">
+      <PageHeading
+        title="运行记录"
+        description="查看任务、实际发送结果与服务记录，需要时再核查处理。"
+        action={
+          <Button busy={action.busy} onClick={() => action.run(refresh)}>
+            <ArrowClockwise size={18} />
+            刷新记录
+          </Button>
+        }
+      />
+      <Feedback error={action.error} />
+      <div className="tabs" role="tablist" aria-label="运行记录">
+        {[
+          ['tasks', '任务记录'],
+          ['sends', '发送记录'],
+          ['logs', '服务日志'],
+        ].map(([id, label]) => (
+          <button
+            role="tab"
+            key={id}
+            id={`tab-${id}`}
+            aria-selected={tab === id}
+            aria-controls={`panel-${id}`}
+            onClick={() => setTab(id)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
+        {tab === 'tasks' && <Tasks revision={revision} refresh={refresh} />}
+        {tab === 'sends' && <Sends revision={revision} refresh={refresh} />}
+        {tab === 'logs' && <RuntimeLogs revision={revision} />}
+      </div>
+    </main>
+  );
 }
 function Tasks({ revision, refresh }: { revision: number; refresh: () => Promise<void> }) {
-  const [filter, setFilter] = useState('all'), [page, setPage] = useState(1), [pageSize, setPageSize] = useState(20), action = useAction();
-  const resource = useResource<PageResult<Task>>(`/api/tasks?${queryString({page,pageSize,status:filter === 'all' ? undefined : filter})}`, revision);
+  const [filter, setFilter] = useState('all'),
+    [page, setPage] = useState(1),
+    [pageSize, setPageSize] = useState(20),
+    action = useAction();
+  const resource = useResource<PageResult<Task>>(
+    `/api/tasks?${queryString({ page, pageSize, status: filter === 'all' ? undefined : filter })}`,
+    revision,
+  );
   const rows = resource.data?.items || [];
-  return <><Notice>任务处理结束不代表微信已发送。只有“微信已发送”表示桥接观察到了发送气泡；跳过和未发送会单独说明。</Notice><div className="toolbar"><h2>任务记录</h2><select aria-label="筛选任务状态" value={filter} onChange={e => { setFilter(e.target.value); setPage(1); }}><option value="all">全部状态</option><option value="skipped">已跳过 / 仅记录</option>{['pending', 'running', 'retrying', 'failed', 'unknown', 'completed', 'cancelled'].map(state => <option value={state} key={state}>{states[state]}</option>)}</select></div><Feedback error={action.error} success={action.success} /><ResourceState loading={!resource.data && resource.loading} error={resource.error} retry={resource.reload} />{resource.data && (rows.length ? <div className="table-wrap"><table><thead><tr><th>任务</th><th>群聊</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead><tbody>{rows.map(task => <tr key={task.id}><td><strong>{kinds[task.kind] || task.kind}</strong>{task.error && <p className="table-error">{task.error}</p>}{task.result?.reason && <p className="hint">{task.result.reason}</p>}</td><td>{task.chat_name || '全局任务'}</td><td><Badge tone={task.delivery_status === 'sent' ? 'good' : ['failed', 'unknown'].includes(task.state) ? 'warn' : 'neutral'}>{taskLabel(task)}</Badge></td><td className="nowrap">{dateTime(task.created_at)}</td><td>{task.state === 'failed' ? <Button busy={action.busy} onClick={() => action.run(async () => { await api(`/api/tasks/${task.id}/retry`, 'POST', {}); await refresh(); await resource.reload(); }, '已提交任务重试。')}><ArrowCounterClockwise size={16} />重试</Button> : <span className="hint">—</span>}</td></tr>)}</tbody></table></div> : <Empty title="暂无匹配的任务">真实任务执行后，会在这里留下状态与结果。</Empty>)}{resource.data && <Pagination page={page} pageSize={pageSize} total={resource.data.total} onPage={setPage} onPageSize={size=>{setPageSize(size);setPage(1);}} busy={resource.loading} />}</>;
+  return (
+    <>
+      <Notice>
+        任务处理结束不代表微信已发送。只有“微信已发送”表示桥接观察到了发送气泡；跳过和未发送会单独说明。
+      </Notice>
+      <div className="toolbar">
+        <h2>任务记录</h2>
+        <select
+          aria-label="筛选任务状态"
+          value={filter}
+          onChange={(e) => {
+            setFilter(e.target.value);
+            setPage(1);
+          }}
+        >
+          <option value="all">全部状态</option>
+          <option value="skipped">已跳过 / 仅记录</option>
+          {['pending', 'running', 'retrying', 'failed', 'unknown', 'completed', 'cancelled'].map(
+            (state) => (
+              <option value={state} key={state}>
+                {states[state]}
+              </option>
+            ),
+          )}
+        </select>
+      </div>
+      <Feedback error={action.error} success={action.success} />
+      <ResourceState
+        loading={!resource.data && resource.loading}
+        error={resource.error}
+        retry={resource.reload}
+      />
+      {resource.data &&
+        (rows.length ? (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>任务</th>
+                  <th>群聊</th>
+                  <th>状态</th>
+                  <th>创建时间</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((task) => (
+                  <tr key={task.id}>
+                    <td>
+                      <strong>{kinds[task.kind] || task.kind}</strong>
+                      {task.error && <p className="table-error">{task.error}</p>}
+                      {task.result?.reason && <p className="hint">{task.result.reason}</p>}
+                    </td>
+                    <td>{task.chat_name || '全局任务'}</td>
+                    <td>
+                      <Badge
+                        tone={
+                          task.delivery_status === 'sent'
+                            ? 'good'
+                            : ['failed', 'unknown'].includes(task.state)
+                              ? 'warn'
+                              : 'neutral'
+                        }
+                      >
+                        {taskLabel(task)}
+                      </Badge>
+                    </td>
+                    <td className="nowrap">{dateTime(task.created_at)}</td>
+                    <td>
+                      {task.state === 'failed' ? (
+                        <Button
+                          busy={action.busy}
+                          onClick={() =>
+                            action.run(async () => {
+                              await api(`/api/tasks/${task.id}/retry`, 'POST', {});
+                              await refresh();
+                              await resource.reload();
+                            }, '已提交任务重试。')
+                          }
+                        >
+                          <ArrowCounterClockwise size={16} />
+                          重试
+                        </Button>
+                      ) : (
+                        <span className="hint">—</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <Empty title="暂无匹配的任务">真实任务执行后，会在这里留下状态与结果。</Empty>
+        ))}
+      {resource.data && (
+        <Pagination
+          page={page}
+          pageSize={pageSize}
+          total={resource.data.total}
+          onPage={setPage}
+          onPageSize={(size) => {
+            setPageSize(size);
+            setPage(1);
+          }}
+          busy={resource.loading}
+        />
+      )}
+    </>
+  );
 }
 function Sends({ revision, refresh }: { revision: number; refresh: () => Promise<void> }) {
-  const [page, setPage] = useState(1), [pageSize, setPageSize] = useState(20), [onlyUnknown, setOnlyUnknown] = useState(false), [resolve, setResolve] = useState<{ send: Send; action: 'sent' | 'cancel' | 'retry' }>(), action = useAction();
-  const resource = useResource<PageResult<Send>>(`/api/sends?${queryString({page,pageSize,status:onlyUnknown ? 'unknown' : undefined})}`, revision);
+  const [page, setPage] = useState(1),
+    [pageSize, setPageSize] = useState(20),
+    [onlyUnknown, setOnlyUnknown] = useState(false),
+    [resolve, setResolve] = useState<{ send: Send; action: 'sent' | 'cancel' | 'retry' }>(),
+    action = useAction();
+  const resource = useResource<PageResult<Send>>(
+    `/api/sends?${queryString({ page, pageSize, status: onlyUnknown ? 'unknown' : undefined })}`,
+    revision,
+  );
   const rows = resource.data?.items || [];
   const labels = { sent: '确认已经发送', cancel: '确认未发并取消', retry: '确认未发并重试' };
-  return <><Notice>发送结果未知时，请先在微信核对实际聊天记录。只有确认未发送后才选择重试，避免重复消息。</Notice><div className="toolbar"><h2>发送记录</h2><label className="checkbox-label"><input type="checkbox" checked={onlyUnknown} onChange={e => { setOnlyUnknown(e.target.checked); setPage(1); }} />只看结果未知</label></div><Feedback error={action.error} success={action.success} /><ResourceState loading={!resource.data && resource.loading} error={resource.error} retry={resource.reload} />{resource.data && (rows.length ? <div className="send-list">{rows.map(send => <article key={send.id}><div className="section-title"><div><h3>{send.chat_name || '未知群聊'}</h3><span className="hint">{kinds[send.kind] || send.kind} · {dateTime(send.created_at)}</span></div><Badge tone={send.status === 'sent' ? 'good' : send.status === 'unknown' ? 'warn' : 'neutral'}>{states[send.status] || send.status}</Badge></div><p className="send-content">{send.content}</p>{send.detail && <p className="hint">{send.detail}</p>}{send.status === 'unknown' && <div className="button-row">{(['sent', 'cancel', 'retry'] as const).map(kind => <Button key={kind} onClick={() => setResolve({ send, action: kind })}>{kind === 'sent' ? <CheckCircle size={17} /> : kind === 'cancel' ? <XCircle size={17} /> : <PaperPlaneTilt size={17} />}{labels[kind]}</Button>)}</div>}</article>)}</div> : <Empty title="暂无匹配的发送记录">这里仅显示实际提交的微信消息与发送结果。</Empty>)}
-    {resource.data && <Pagination page={page} pageSize={pageSize} total={resource.data.total} onPage={setPage} onPageSize={size=>{setPageSize(size);setPage(1);}} busy={resource.loading} />}
-    {resolve && <Confirm title="核查微信实际发送结果" confirm={labels[resolve.action]} danger={resolve.action === 'retry'} onClose={() => setResolve(undefined)} onConfirm={async () => { await api(`/api/sends/${resolve.send.id}/resolve`, 'POST', { action: resolve.action }); await refresh(); await resource.reload(); action.setSuccess('发送记录已根据你的核查结果处理。'); }}>所选群聊：{resolve.send.chat_name || '未知群聊'}。消息：{resolve.send.content}。{resolve.action === 'sent' ? '请确认你已经在微信中看到了这条消息。' : resolve.action === 'retry' ? '请确认微信中没有发送成功；继续将重新提交一条真实消息。' : '请确认这条消息没有发送成功，并取消后续发送。'}</Confirm>}
-  </>;
+  return (
+    <>
+      <Notice>
+        发送结果未知时，请先在微信核对实际聊天记录。只有确认未发送后才选择重试，避免重复消息。
+      </Notice>
+      <div className="toolbar">
+        <h2>发送记录</h2>
+        <label className="checkbox-label">
+          <input
+            type="checkbox"
+            checked={onlyUnknown}
+            onChange={(e) => {
+              setOnlyUnknown(e.target.checked);
+              setPage(1);
+            }}
+          />
+          只看结果未知
+        </label>
+      </div>
+      <Feedback error={action.error} success={action.success} />
+      <ResourceState
+        loading={!resource.data && resource.loading}
+        error={resource.error}
+        retry={resource.reload}
+      />
+      {resource.data &&
+        (rows.length ? (
+          <div className="send-list">
+            {rows.map((send) => (
+              <article key={send.id}>
+                <div className="section-title">
+                  <div>
+                    <h3>{send.chat_name || '未知群聊'}</h3>
+                    <span className="hint">
+                      {kinds[send.kind] || send.kind} · {dateTime(send.created_at)}
+                    </span>
+                  </div>
+                  <Badge
+                    tone={
+                      send.status === 'sent'
+                        ? 'good'
+                        : send.status === 'unknown'
+                          ? 'warn'
+                          : 'neutral'
+                    }
+                  >
+                    {states[send.status] || send.status}
+                  </Badge>
+                </div>
+                <p className="send-content">{send.content}</p>
+                {send.detail && <p className="hint">{send.detail}</p>}
+                {send.status === 'unknown' && (
+                  <div className="button-row">
+                    {(['sent', 'cancel', 'retry'] as const).map((kind) => (
+                      <Button key={kind} onClick={() => setResolve({ send, action: kind })}>
+                        {kind === 'sent' ? (
+                          <CheckCircle size={17} />
+                        ) : kind === 'cancel' ? (
+                          <XCircle size={17} />
+                        ) : (
+                          <PaperPlaneTilt size={17} />
+                        )}
+                        {labels[kind]}
+                      </Button>
+                    ))}
+                  </div>
+                )}
+              </article>
+            ))}
+          </div>
+        ) : (
+          <Empty title="暂无匹配的发送记录">这里仅显示实际提交的微信消息与发送结果。</Empty>
+        ))}
+      {resource.data && (
+        <Pagination
+          page={page}
+          pageSize={pageSize}
+          total={resource.data.total}
+          onPage={setPage}
+          onPageSize={(size) => {
+            setPageSize(size);
+            setPage(1);
+          }}
+          busy={resource.loading}
+        />
+      )}
+      {resolve && (
+        <Confirm
+          title="核查微信实际发送结果"
+          confirm={labels[resolve.action]}
+          danger={resolve.action === 'retry'}
+          onClose={() => setResolve(undefined)}
+          onConfirm={async () => {
+            await api(`/api/sends/${resolve.send.id}/resolve`, 'POST', { action: resolve.action });
+            await refresh();
+            await resource.reload();
+            action.setSuccess('发送记录已根据你的核查结果处理。');
+          }}
+        >
+          所选群聊：{resolve.send.chat_name || '未知群聊'}。消息：{resolve.send.content}。
+          {resolve.action === 'sent'
+            ? '请确认你已经在微信中看到了这条消息。'
+            : resolve.action === 'retry'
+              ? '请确认微信中没有发送成功；继续将重新提交一条真实消息。'
+              : '请确认这条消息没有发送成功，并取消后续发送。'}
+        </Confirm>
+      )}
+    </>
+  );
 }
 function RuntimeLogs({ revision }: { revision: number }) {
-  const [level, setLevel] = useState('all'), [page, setPage] = useState(1), [pageSize, setPageSize] = useState(20);
-  const resource = useResource<PageResult<Log>>(`/api/logs?${queryString({page,pageSize,level:level==='all'?undefined:level})}`, revision);
+  const [level, setLevel] = useState('all'),
+    [page, setPage] = useState(1),
+    [pageSize, setPageSize] = useState(20);
+  const resource = useResource<PageResult<Log>>(
+    `/api/logs?${queryString({ page, pageSize, level: level === 'all' ? undefined : level })}`,
+    revision,
+  );
   const rows = resource.data?.items || [];
-  return <><div className="toolbar"><h2>服务日志</h2><select aria-label="日志级别" value={level} onChange={e => { setLevel(e.target.value); setPage(1); }}><option value="all">全部级别</option>{['info', 'warn', 'error', 'debug'].map(l => <option value={l} key={l}>{states[l]}</option>)}</select></div><ResourceState loading={!resource.data && resource.loading} error={resource.error} retry={resource.reload} />{resource.data && (rows.length ? <div className="runtime-logs">{rows.map(log => <article key={log.id}><ClockCounterClockwise size={19} /><div><div className="log-heading"><Badge tone={['warn', 'error'].includes(log.level) ? 'warn' : 'neutral'}>{states[log.level] || log.level}</Badge><time>{dateTime(log.created_at)}</time></div><p>{log.message}</p>{log.metadata && Object.keys(log.metadata as object).length > 0 ? <details><summary>查看附加信息</summary><p className="log-metadata">{JSON.stringify(log.metadata, null, 2)}</p></details> : null}</div></article>)}</div> : <Empty title="暂无匹配的日志">服务事件发生后会显示在这里。</Empty>)}{resource.data && <Pagination page={page} pageSize={pageSize} total={resource.data.total} onPage={setPage} onPageSize={size=>{setPageSize(size);setPage(1);}} busy={resource.loading} />}</>;
+  return (
+    <>
+      <div className="toolbar">
+        <h2>服务日志</h2>
+        <select
+          aria-label="日志级别"
+          value={level}
+          onChange={(e) => {
+            setLevel(e.target.value);
+            setPage(1);
+          }}
+        >
+          <option value="all">全部级别</option>
+          {['info', 'warn', 'error', 'debug'].map((l) => (
+            <option value={l} key={l}>
+              {states[l]}
+            </option>
+          ))}
+        </select>
+      </div>
+      <ResourceState
+        loading={!resource.data && resource.loading}
+        error={resource.error}
+        retry={resource.reload}
+      />
+      {resource.data &&
+        (rows.length ? (
+          <div className="runtime-logs">
+            {rows.map((log) => (
+              <article key={log.id}>
+                <ClockCounterClockwise size={19} />
+                <div>
+                  <div className="log-heading">
+                    <Badge tone={['warn', 'error'].includes(log.level) ? 'warn' : 'neutral'}>
+                      {states[log.level] || log.level}
+                    </Badge>
+                    <time>{dateTime(log.created_at)}</time>
+                  </div>
+                  <p>{log.message}</p>
+                  {log.metadata && Object.keys(log.metadata as object).length > 0 ? (
+                    <details>
+                      <summary>查看附加信息</summary>
+                      <p className="log-metadata">{JSON.stringify(log.metadata, null, 2)}</p>
+                    </details>
+                  ) : null}
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <Empty title="暂无匹配的日志">服务事件发生后会显示在这里。</Empty>
+        ))}
+      {resource.data && (
+        <Pagination
+          page={page}
+          pageSize={pageSize}
+          total={resource.data.total}
+          onPage={setPage}
+          onPageSize={(size) => {
+            setPageSize(size);
+            setPage(1);
+          }}
+          busy={resource.loading}
+        />
+      )}
+    </>
+  );
 }

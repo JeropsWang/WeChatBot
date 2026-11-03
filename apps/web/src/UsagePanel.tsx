@@ -1,57 +1,646 @@
 /** 模型调用统计和当前页 CSV 导出。未知 token、价格与费用保持未知，不以缺失补零制造成本估计。 */
 import { useEffect, useMemo, useState } from 'react';
 import { CaretLeft, DownloadSimple } from '@phosphor-icons/react';
-import { api, dateTime, queryString, useAction, useResource, type Bootstrap, type PageResult } from './api';
+import {
+  api,
+  dateTime,
+  queryString,
+  useAction,
+  useResource,
+  type Bootstrap,
+  type PageResult,
+} from './api';
 import { Badge, Button, Empty, Feedback, Notice, Pagination, ResourceState } from './ui';
 
-type Usage = { uncachedInput: number | null; cacheRead: number | null; cacheWrite: number | null; inputTotal: number | null; output: number | null; reasoning: number | null; total: number | null };
-interface Call { id: string; runId: string; modelId: string; modelName: string; protocol: string; purpose: string; taskId?: string; chatId?: string; memberId?: string; attempt: number; round: number; status: string; startedAt: string; finishedAt: string; usage: Usage; cost: number | null; currency: string | null; httpStatus?: number }
-interface Summary { calls: number; errors: number; usage: Usage; knownCounts: Record<string, number>; cacheReadTokenRate: number | null; cacheHitRequestRate: number | null; cacheReportingCalls: number; costs: { currency: string | null; cost: number | null; knownCalls: number }[] }
-type CallDetail = Call & { rounds?: Call[]; runUsage?: Usage; runCost?: number | null; runCurrency?: string | null };
+type Usage = {
+  uncachedInput: number | null;
+  cacheRead: number | null;
+  cacheWrite: number | null;
+  inputTotal: number | null;
+  output: number | null;
+  reasoning: number | null;
+  total: number | null;
+};
+interface Call {
+  id: string;
+  runId: string;
+  modelId: string;
+  modelName: string;
+  protocol: string;
+  purpose: string;
+  taskId?: string;
+  chatId?: string;
+  memberId?: string;
+  attempt: number;
+  round: number;
+  status: string;
+  startedAt: string;
+  finishedAt: string;
+  usage: Usage;
+  cost: number | null;
+  currency: string | null;
+  httpStatus?: number;
+}
+interface Summary {
+  calls: number;
+  errors: number;
+  usage: Usage;
+  knownCounts: Record<string, number>;
+  cacheReadTokenRate: number | null;
+  cacheHitRequestRate: number | null;
+  cacheReportingCalls: number;
+  costs: { currency: string | null; cost: number | null; knownCalls: number }[];
+}
+type CallDetail = Call & {
+  rounds?: Call[];
+  runUsage?: Usage;
+  runCost?: number | null;
+  runCurrency?: string | null;
+};
 type CacheStats = Record<string, { hits: number; misses: number; expired: number; errors: number }>;
-const purposeNames: Record<string, string> = { chat: '聊天回复', reply: '聊天回复', decision: '参与判断', proactive: '主动参与', memory: '记忆整理', preview: '对话预览', test: '连接测试', 'model-test': '连接测试', 'media-tag': '素材标注' };
-const number = (value: number | null | undefined) => value == null ? '未上报' : value.toLocaleString('zh-CN');
-const rate = (value: number | null | undefined) => value == null ? '未上报' : `${(value * 100).toFixed(1)}%`;
-const cost = (value: number | null | undefined, currency?: string | null) => value == null ? '未配置价格 / 用量未上报' : `${currency || ''} ${value.toLocaleString('zh-CN', { maximumFractionDigits: 6 })}`;
-const duration = (call: Call) => { const ms = Date.parse(call.finishedAt) - Date.parse(call.startedAt); return Number.isFinite(ms) ? `${(Math.max(0, ms) / 1000).toFixed(1)}s` : '未上报'; };
-const localDay = (daysAgo = 0) => { const date = new Date(Date.now() - daysAgo * 86400000); return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date); };
+const purposeNames: Record<string, string> = {
+  chat: '聊天回复',
+  reply: '聊天回复',
+  decision: '参与判断',
+  proactive: '主动参与',
+  memory: '记忆整理',
+  preview: '对话预览',
+  test: '连接测试',
+  'model-test': '连接测试',
+  'media-tag': '素材标注',
+};
+const number = (value: number | null | undefined) =>
+  value == null ? '未上报' : value.toLocaleString('zh-CN');
+const rate = (value: number | null | undefined) =>
+  value == null ? '未上报' : `${(value * 100).toFixed(1)}%`;
+const cost = (value: number | null | undefined, currency?: string | null) =>
+  value == null
+    ? '未配置价格 / 用量未上报'
+    : `${currency || ''} ${value.toLocaleString('zh-CN', { maximumFractionDigits: 6 })}`;
+const duration = (call: Call) => {
+  const ms = Date.parse(call.finishedAt) - Date.parse(call.startedAt);
+  return Number.isFinite(ms) ? `${(Math.max(0, ms) / 1000).toFixed(1)}s` : '未上报';
+};
+const localDay = (daysAgo = 0) => {
+  const date = new Date(Date.now() - daysAgo * 86400000);
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(date);
+};
 
 export function UsagePanel({ data, revision }: { data: Bootstrap; revision: number }) {
-  const [from, setFrom] = useState(localDay), [to, setTo] = useState(localDay), [range, setRange] = useState('today'), [modelId, setModelId] = useState(''), [chatId, setChatId] = useState(''), [purpose, setPurpose] = useState('');
-  const [page, setPage] = useState(1), [pageSize, setPageSize] = useState(20), [selectedId, setSelectedId] = useState(''), [mobileDetail, setMobileDetail] = useState(false), [cacheTab, setCacheTab] = useState('model');
-  const query = queryString({ from: from ? `${from}T00:00:00+08:00` : undefined, to: to ? `${to}T23:59:59.999+08:00` : undefined, modelId, chatId, purpose });
-  const summary = useResource<Summary>(`/api/usage/summary?${query}`, revision), calls = useResource<PageResult<Call>>(`/api/usage/calls?${query}&page=${page}&pageSize=${pageSize}`, revision), cache = useResource<CacheStats>('/api/cache/stats', revision);
-  const detail = useResource<CallDetail>(selectedId ? `/api/usage/calls/${selectedId}` : undefined, revision), action = useAction();
-  useEffect(() => { setPage(1); setSelectedId(''); }, [query]);
-  useEffect(() => { if (!selectedId && calls.data?.items.length) setSelectedId(calls.data.items[0].id); }, [calls.data, selectedId]);
-  const costs = summary.data?.costs.filter(item => item.cost !== null) || [];
+  const [from, setFrom] = useState(localDay),
+    [to, setTo] = useState(localDay),
+    [range, setRange] = useState('today'),
+    [modelId, setModelId] = useState(''),
+    [chatId, setChatId] = useState(''),
+    [purpose, setPurpose] = useState('');
+  const [page, setPage] = useState(1),
+    [pageSize, setPageSize] = useState(20),
+    [selectedId, setSelectedId] = useState(''),
+    [mobileDetail, setMobileDetail] = useState(false),
+    [cacheTab, setCacheTab] = useState('model');
+  const query = queryString({
+    from: from ? `${from}T00:00:00+08:00` : undefined,
+    to: to ? `${to}T23:59:59.999+08:00` : undefined,
+    modelId,
+    chatId,
+    purpose,
+  });
+  const summary = useResource<Summary>(`/api/usage/summary?${query}`, revision),
+    calls = useResource<PageResult<Call>>(
+      `/api/usage/calls?${query}&page=${page}&pageSize=${pageSize}`,
+      revision,
+    ),
+    cache = useResource<CacheStats>('/api/cache/stats', revision);
+  const detail = useResource<CallDetail>(
+      selectedId ? `/api/usage/calls/${selectedId}` : undefined,
+      revision,
+    ),
+    action = useAction();
+  useEffect(() => {
+    setPage(1);
+    setSelectedId('');
+  }, [query]);
+  useEffect(() => {
+    if (!selectedId && calls.data?.items.length) setSelectedId(calls.data.items[0].id);
+  }, [calls.data, selectedId]);
+  const costs = summary.data?.costs.filter((item) => item.cost !== null) || [];
   const knownCosts = summary.data?.costs.reduce((sum, item) => sum + item.knownCalls, 0) || 0;
-  const changeRange = (value: string) => { setRange(value); if (value !== 'custom') { setFrom(localDay(value === 'week' ? 6 : 0)); setTo(localDay()); } };
+  const changeRange = (value: string) => {
+    setRange(value);
+    if (value !== 'custom') {
+      setFrom(localDay(value === 'week' ? 6 : 0));
+      setTo(localDay());
+    }
+  };
   // 导出仅覆盖当前页；未知值沿用表格语义，不虚构完整账单。
-  const exportPage = () => action.run(async () => {
-    const records = calls.data?.items || []; if (!records.length) throw new Error('当前页没有可导出的真实调用。');
-    const values = [['时间', '用途', '模型', '群聊ID', '轮次', '输入Token', '未缓存输入', '缓存读取', '缓存写入', '输出Token', '费用', '币种', '状态'], ...records.map(call => [call.startedAt, purposeNames[call.purpose] || call.purpose, call.modelName, call.chatId || '', call.round, call.usage.inputTotal, call.usage.uncachedInput, call.usage.cacheRead, call.usage.cacheWrite, call.usage.output, call.cost, call.currency, call.status])];
-    const csv = values.map(row => row.map(value => { let text = value == null ? '未上报' : String(value); if (/^[=+\-@]/.test(text)) text = `'${text}`; return `"${text.replaceAll('"', '""')}"`; }).join(',')).join('\r\n');
-    const url = URL.createObjectURL(new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8' })); const link = document.createElement('a'); link.href = url; link.download = `WeChatBot调用明细_${from}_${to}_第${page}页.csv`; link.click(); URL.revokeObjectURL(url);
-  }, '已导出当前筛选的本页真实调用记录。');
-  return <><div className="usage-filters"><div className="segmented">{[['today', '今日'], ['week', '最近 7 天'], ['custom', '自定义']].map(([id, label]) => <button key={id} className={range === id ? 'active' : ''} onClick={() => changeRange(id)}>{label}</button>)}</div>{range === 'custom' && <div className="date-range"><input type="date" aria-label="统计开始日期" value={from} max={to || undefined} onChange={e => setFrom(e.target.value)} /><span>至</span><input type="date" aria-label="统计结束日期" value={to} min={from || undefined} onChange={e => setTo(e.target.value)} /></div>}<select aria-label="用量模型筛选" value={modelId} onChange={e => setModelId(e.target.value)}><option value="">所有模型</option>{data.models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</select><select aria-label="用量群聊筛选" value={chatId} onChange={e => setChatId(e.target.value)}><option value="">全部群聊</option>{data.chats.map(chat => <option key={chat.id} value={chat.id}>{chat.name}</option>)}</select><select aria-label="调用用途" value={purpose} onChange={e => setPurpose(e.target.value)}><option value="">全部用途</option>{Object.entries(purposeNames).map(([value, name]) => <option key={value} value={value}>{name}（{value}）</option>)}</select><Button disabled={!calls.data?.items.length} busy={action.busy} onClick={exportPage}><DownloadSimple size={18} />导出本页明细</Button></div><Feedback error={action.error} success={action.success} /><ResourceState {...summary} retry={summary.reload} />
-    <div className={`master-detail usage-workspace ${mobileDetail ? 'show-detail' : ''}`}><section className="master-pane">{summary.data && <div className="usage-summary"><div><span>输入 Token</span><strong>{number(summary.data.usage.inputTotal)}</strong><small>{summary.data.knownCounts.inputTotal} / {summary.data.calls} 次已上报</small></div><div><span>输出 Token</span><strong>{number(summary.data.usage.output)}</strong><small>含推理 Token，不重复计数</small></div><div><span>缓存读取 / 总输入</span><strong>{rate(summary.data.cacheReadTokenRate)}</strong><small>{summary.data.cacheReportingCalls} 次调用报告缓存</small></div><div><span>估算费用</span><strong className="accent-text">{costs.length ? costs.map(item => `${item.currency || ''} ${item.cost?.toLocaleString('zh-CN', { maximumFractionDigits: 4 })}`).join(' / ') : '未配置价格'}</strong><small>{summary.data.calls ? `${knownCosts} / ${summary.data.calls} 次费用可计算` : '当前范围没有调用'}</small></div></div>}
-    <TokenChart calls={calls.data?.items || []} />
-    <section className="cache-tabs"><div className="section-title"><h3>缓存统计</h3><div className="segmented"><button className={cacheTab === 'model' ? 'active' : ''} onClick={() => setCacheTab('model')}>模型缓存</button><button className={cacheTab === 'app' ? 'active' : ''} onClick={() => setCacheTab('app')}>应用缓存</button></div></div>{cacheTab === 'model' ? <div className="cache-stats"><div><p>缓存读取 Token</p><strong>{number(summary.data?.usage.cacheRead)}</strong></div><div><p>缓存写入 Token</p><strong>{number(summary.data?.usage.cacheWrite)}</strong></div><div><p>报告缓存的请求命中率</p><strong>{rate(summary.data?.cacheHitRequestRate)}</strong></div><div><p>未缓存输入 Token</p><strong>{number(summary.data?.usage.uncachedInput)}</strong></div></div> : <><ResourceState {...cache} retry={cache.reload} /><p className="hint">当前服务进程的应用缓存计数，独立于模型 Token 和上方筛选时间。</p>{cache.data && <div className="cache-stats">{Object.entries(cache.data).map(([key, item]) => <div key={key}><p>{{ search: '搜索', page: '网页', embedding: '向量' }[key] || key}</p><strong>{item.hits} 命中 / {item.misses} 未命中</strong><p>过期 {item.expired} · 错误 {item.errors}</p></div>)}</div>}</>}</section>
-    <div className="section-title"><h3>调用明细</h3><span className="hint">逐轮记录 · {summary.data?.errors ?? '—'} 次错误</span></div><ResourceState loading={!calls.data && calls.loading} error={calls.error} retry={calls.reload} />{calls.data && (calls.data.items.length ? <div className="table-wrap usage-table"><table><thead><tr><th>时间 / 用途</th><th>模型</th><th>输入</th><th>输出</th><th>缓存读取</th><th>耗时</th><th>状态</th></tr></thead><tbody>{calls.data.items.map(call => <tr className={`usage-call-row ${selectedId === call.id ? 'selected' : ''}`} key={call.id} onClick={() => { setSelectedId(call.id); setMobileDetail(true); }}><td><button className="text-button" onClick={e => { e.stopPropagation(); setSelectedId(call.id); setMobileDetail(true); }}>{dateTime(call.startedAt)}</button><p>{purposeNames[call.purpose] || call.purpose}</p></td><td>{call.modelName}</td><td>{number(call.usage.inputTotal)}</td><td>{number(call.usage.output)}</td><td>{number(call.usage.cacheRead)}</td><td>{duration(call)}</td><td><Badge tone={call.status === 'success' || call.status === 'completed' ? 'good' : 'warn'}>{call.status === 'success' || call.status === 'completed' ? '成功' : call.status === 'error' ? '失败' : call.status}</Badge></td></tr>)}</tbody></table></div> : <Empty title="此范围还没有模型调用">实际请求完成后，会记录模型返回的用量。缺失字段显示“未上报”。</Empty>)}{calls.data && <Pagination page={page} pageSize={pageSize} total={calls.data.total} onPage={setPage} onPageSize={value => { setPageSize(value); setPage(1); }} busy={calls.loading} />}</section>
-    <aside className="detail-pane usage-detail"><button className="text-button mobile-detail-back" onClick={() => setMobileDetail(false)}><CaretLeft size={18} />返回调用列表</button><h2>本次调用</h2><ResourceState {...detail} retry={detail.reload} />{detail.data ? <CallDetails call={detail.data} data={data} /> : !detail.loading && !detail.error && <Empty title="选择一条调用查看详情" />}</aside></div></>;
+  const exportPage = () =>
+    action.run(async () => {
+      const records = calls.data?.items || [];
+      if (!records.length) throw new Error('当前页没有可导出的真实调用。');
+      const values = [
+        [
+          '时间',
+          '用途',
+          '模型',
+          '群聊ID',
+          '轮次',
+          '输入Token',
+          '未缓存输入',
+          '缓存读取',
+          '缓存写入',
+          '输出Token',
+          '费用',
+          '币种',
+          '状态',
+        ],
+        ...records.map((call) => [
+          call.startedAt,
+          purposeNames[call.purpose] || call.purpose,
+          call.modelName,
+          call.chatId || '',
+          call.round,
+          call.usage.inputTotal,
+          call.usage.uncachedInput,
+          call.usage.cacheRead,
+          call.usage.cacheWrite,
+          call.usage.output,
+          call.cost,
+          call.currency,
+          call.status,
+        ]),
+      ];
+      const csv = values
+        .map((row) =>
+          row
+            .map((value) => {
+              let text = value == null ? '未上报' : String(value);
+              if (/^[=+\-@]/.test(text)) text = `'${text}`;
+              return `"${text.replaceAll('"', '""')}"`;
+            })
+            .join(','),
+        )
+        .join('\r\n');
+      const url = URL.createObjectURL(
+        new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8' }),
+      );
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `WeChatBot调用明细_${from}_${to}_第${page}页.csv`;
+      link.click();
+      URL.revokeObjectURL(url);
+    }, '已导出当前筛选的本页真实调用记录。');
+  return (
+    <>
+      <div className="usage-filters">
+        <div className="segmented">
+          {[
+            ['today', '今日'],
+            ['week', '最近 7 天'],
+            ['custom', '自定义'],
+          ].map(([id, label]) => (
+            <button
+              key={id}
+              className={range === id ? 'active' : ''}
+              onClick={() => changeRange(id)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {range === 'custom' && (
+          <div className="date-range">
+            <input
+              type="date"
+              aria-label="统计开始日期"
+              value={from}
+              max={to || undefined}
+              onChange={(e) => setFrom(e.target.value)}
+            />
+            <span>至</span>
+            <input
+              type="date"
+              aria-label="统计结束日期"
+              value={to}
+              min={from || undefined}
+              onChange={(e) => setTo(e.target.value)}
+            />
+          </div>
+        )}
+        <select
+          aria-label="用量模型筛选"
+          value={modelId}
+          onChange={(e) => setModelId(e.target.value)}
+        >
+          <option value="">所有模型</option>
+          {data.models.map((model) => (
+            <option key={model.id} value={model.id}>
+              {model.name}
+            </option>
+          ))}
+        </select>
+        <select
+          aria-label="用量群聊筛选"
+          value={chatId}
+          onChange={(e) => setChatId(e.target.value)}
+        >
+          <option value="">全部群聊</option>
+          {data.chats.map((chat) => (
+            <option key={chat.id} value={chat.id}>
+              {chat.name}
+            </option>
+          ))}
+        </select>
+        <select aria-label="调用用途" value={purpose} onChange={(e) => setPurpose(e.target.value)}>
+          <option value="">全部用途</option>
+          {Object.entries(purposeNames).map(([value, name]) => (
+            <option key={value} value={value}>
+              {name}（{value}）
+            </option>
+          ))}
+        </select>
+        <Button disabled={!calls.data?.items.length} busy={action.busy} onClick={exportPage}>
+          <DownloadSimple size={18} />
+          导出本页明细
+        </Button>
+      </div>
+      <Feedback error={action.error} success={action.success} />
+      <ResourceState {...summary} retry={summary.reload} />
+      <div className={`master-detail usage-workspace ${mobileDetail ? 'show-detail' : ''}`}>
+        <section className="master-pane">
+          {summary.data && (
+            <div className="usage-summary">
+              <div>
+                <span>输入 Token</span>
+                <strong>{number(summary.data.usage.inputTotal)}</strong>
+                <small>
+                  {summary.data.knownCounts.inputTotal} / {summary.data.calls} 次已上报
+                </small>
+              </div>
+              <div>
+                <span>输出 Token</span>
+                <strong>{number(summary.data.usage.output)}</strong>
+                <small>含推理 Token，不重复计数</small>
+              </div>
+              <div>
+                <span>缓存读取 / 总输入</span>
+                <strong>{rate(summary.data.cacheReadTokenRate)}</strong>
+                <small>{summary.data.cacheReportingCalls} 次调用报告缓存</small>
+              </div>
+              <div>
+                <span>估算费用</span>
+                <strong className="accent-text">
+                  {costs.length
+                    ? costs
+                        .map(
+                          (item) =>
+                            `${item.currency || ''} ${item.cost?.toLocaleString('zh-CN', { maximumFractionDigits: 4 })}`,
+                        )
+                        .join(' / ')
+                    : '未配置价格'}
+                </strong>
+                <small>
+                  {summary.data.calls
+                    ? `${knownCosts} / ${summary.data.calls} 次费用可计算`
+                    : '当前范围没有调用'}
+                </small>
+              </div>
+            </div>
+          )}
+          <TokenChart calls={calls.data?.items || []} />
+          <section className="cache-tabs">
+            <div className="section-title">
+              <h3>缓存统计</h3>
+              <div className="segmented">
+                <button
+                  className={cacheTab === 'model' ? 'active' : ''}
+                  onClick={() => setCacheTab('model')}
+                >
+                  模型缓存
+                </button>
+                <button
+                  className={cacheTab === 'app' ? 'active' : ''}
+                  onClick={() => setCacheTab('app')}
+                >
+                  应用缓存
+                </button>
+              </div>
+            </div>
+            {cacheTab === 'model' ? (
+              <div className="cache-stats">
+                <div>
+                  <p>缓存读取 Token</p>
+                  <strong>{number(summary.data?.usage.cacheRead)}</strong>
+                </div>
+                <div>
+                  <p>缓存写入 Token</p>
+                  <strong>{number(summary.data?.usage.cacheWrite)}</strong>
+                </div>
+                <div>
+                  <p>报告缓存的请求命中率</p>
+                  <strong>{rate(summary.data?.cacheHitRequestRate)}</strong>
+                </div>
+                <div>
+                  <p>未缓存输入 Token</p>
+                  <strong>{number(summary.data?.usage.uncachedInput)}</strong>
+                </div>
+              </div>
+            ) : (
+              <>
+                <ResourceState {...cache} retry={cache.reload} />
+                <p className="hint">
+                  当前服务进程的应用缓存计数，独立于模型 Token 和上方筛选时间。
+                </p>
+                {cache.data && (
+                  <div className="cache-stats">
+                    {Object.entries(cache.data).map(([key, item]) => (
+                      <div key={key}>
+                        <p>{{ search: '搜索', page: '网页', embedding: '向量' }[key] || key}</p>
+                        <strong>
+                          {item.hits} 命中 / {item.misses} 未命中
+                        </strong>
+                        <p>
+                          过期 {item.expired} · 错误 {item.errors}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </section>
+          <div className="section-title">
+            <h3>调用明细</h3>
+            <span className="hint">逐轮记录 · {summary.data?.errors ?? '—'} 次错误</span>
+          </div>
+          <ResourceState
+            loading={!calls.data && calls.loading}
+            error={calls.error}
+            retry={calls.reload}
+          />
+          {calls.data &&
+            (calls.data.items.length ? (
+              <div className="table-wrap usage-table">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>时间 / 用途</th>
+                      <th>模型</th>
+                      <th>输入</th>
+                      <th>输出</th>
+                      <th>缓存读取</th>
+                      <th>耗时</th>
+                      <th>状态</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {calls.data.items.map((call) => (
+                      <tr
+                        className={`usage-call-row ${selectedId === call.id ? 'selected' : ''}`}
+                        key={call.id}
+                        onClick={() => {
+                          setSelectedId(call.id);
+                          setMobileDetail(true);
+                        }}
+                      >
+                        <td>
+                          <button
+                            className="text-button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedId(call.id);
+                              setMobileDetail(true);
+                            }}
+                          >
+                            {dateTime(call.startedAt)}
+                          </button>
+                          <p>{purposeNames[call.purpose] || call.purpose}</p>
+                        </td>
+                        <td>{call.modelName}</td>
+                        <td>{number(call.usage.inputTotal)}</td>
+                        <td>{number(call.usage.output)}</td>
+                        <td>{number(call.usage.cacheRead)}</td>
+                        <td>{duration(call)}</td>
+                        <td>
+                          <Badge
+                            tone={
+                              call.status === 'success' || call.status === 'completed'
+                                ? 'good'
+                                : 'warn'
+                            }
+                          >
+                            {call.status === 'success' || call.status === 'completed'
+                              ? '成功'
+                              : call.status === 'error'
+                                ? '失败'
+                                : call.status}
+                          </Badge>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <Empty title="此范围还没有模型调用">
+                实际请求完成后，会记录模型返回的用量。缺失字段显示“未上报”。
+              </Empty>
+            ))}
+          {calls.data && (
+            <Pagination
+              page={page}
+              pageSize={pageSize}
+              total={calls.data.total}
+              onPage={setPage}
+              onPageSize={(value) => {
+                setPageSize(value);
+                setPage(1);
+              }}
+              busy={calls.loading}
+            />
+          )}
+        </section>
+        <aside className="detail-pane usage-detail">
+          <button className="text-button mobile-detail-back" onClick={() => setMobileDetail(false)}>
+            <CaretLeft size={18} />
+            返回调用列表
+          </button>
+          <h2>本次调用</h2>
+          <ResourceState {...detail} retry={detail.reload} />
+          {detail.data ? (
+            <CallDetails call={detail.data} data={data} />
+          ) : (
+            !detail.loading && !detail.error && <Empty title="选择一条调用查看详情" />
+          )}
+        </aside>
+      </div>
+    </>
+  );
 }
 
 function TokenChart({ calls }: { calls: Call[] }) {
   const buckets = useMemo(() => {
-    const groups = new Map<string, { label: string; uncached: number; cached: number; output: number; known: boolean }>();
-    calls.forEach(call => { const key = call.startedAt.slice(0, 13), item = groups.get(key) || { label: dateTime(call.startedAt), uncached: 0, cached: 0, output: 0, known: false }; item.uncached += call.usage.uncachedInput ?? 0; item.cached += call.usage.cacheRead ?? 0; item.output += call.usage.output ?? 0; item.known ||= [call.usage.uncachedInput, call.usage.cacheRead, call.usage.output].some(value => value !== null); groups.set(key, item); });
+    const groups = new Map<
+      string,
+      { label: string; uncached: number; cached: number; output: number; known: boolean }
+    >();
+    calls.forEach((call) => {
+      const key = call.startedAt.slice(0, 13),
+        item = groups.get(key) || {
+          label: dateTime(call.startedAt),
+          uncached: 0,
+          cached: 0,
+          output: 0,
+          known: false,
+        };
+      item.uncached += call.usage.uncachedInput ?? 0;
+      item.cached += call.usage.cacheRead ?? 0;
+      item.output += call.usage.output ?? 0;
+      item.known ||= [call.usage.uncachedInput, call.usage.cacheRead, call.usage.output].some(
+        (value) => value !== null,
+      );
+      groups.set(key, item);
+    });
     return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, value]) => value);
   }, [calls]);
-  const maximum = Math.max(1, ...buckets.map(item => item.uncached + item.cached + item.output));
-  return <section className="usage-chart"><h3>Token 使用量（本页调用，按小时）</h3>{buckets.some(item => item.known) ? <><div className="usage-bars" role="img" aria-label="当前页已上报的未缓存输入、缓存读取与输出 Token 柱状图">{buckets.map((item, index) => <div className="usage-bar-slot" key={index} title={`${item.label}：未缓存 ${item.uncached}，缓存读取 ${item.cached}，输出 ${item.output}`}><div className="usage-bar" style={{ height: `${(item.uncached + item.cached + item.output) / maximum * 100}%` }}><span className="uncached" style={{ flex: item.uncached }} /><span className="cached" style={{ flex: item.cached }} /><span className="output" style={{ flex: item.output }} /></div><small>{buckets.length <= 8 || index % 3 === 0 ? item.label.slice(-5) : ''}</small></div>)}</div><div className="chart-legend"><span><i />未缓存输入</span><span><i className="cached" />缓存读取</span><span><i className="output" />输出</span></div><p className="hint">图表仅汇总本页已上报字段，缺失用量不绘制。完整筛选范围以顶部汇总为准。</p></> : <Empty title="暂无可绘制的真实用量">模型尚未上报，或当前范围没有调用。</Empty>}</section>;
+  const maximum = Math.max(1, ...buckets.map((item) => item.uncached + item.cached + item.output));
+  return (
+    <section className="usage-chart">
+      <h3>Token 使用量（本页调用，按小时）</h3>
+      {buckets.some((item) => item.known) ? (
+        <>
+          <div
+            className="usage-bars"
+            role="img"
+            aria-label="当前页已上报的未缓存输入、缓存读取与输出 Token 柱状图"
+          >
+            {buckets.map((item, index) => (
+              <div
+                className="usage-bar-slot"
+                key={index}
+                title={`${item.label}：未缓存 ${item.uncached}，缓存读取 ${item.cached}，输出 ${item.output}`}
+              >
+                <div
+                  className="usage-bar"
+                  style={{
+                    height: `${((item.uncached + item.cached + item.output) / maximum) * 100}%`,
+                  }}
+                >
+                  <span className="uncached" style={{ flex: item.uncached }} />
+                  <span className="cached" style={{ flex: item.cached }} />
+                  <span className="output" style={{ flex: item.output }} />
+                </div>
+                <small>{buckets.length <= 8 || index % 3 === 0 ? item.label.slice(-5) : ''}</small>
+              </div>
+            ))}
+          </div>
+          <div className="chart-legend">
+            <span>
+              <i />
+              未缓存输入
+            </span>
+            <span>
+              <i className="cached" />
+              缓存读取
+            </span>
+            <span>
+              <i className="output" />
+              输出
+            </span>
+          </div>
+          <p className="hint">
+            图表仅汇总本页已上报字段，缺失用量不绘制。完整筛选范围以顶部汇总为准。
+          </p>
+        </>
+      ) : (
+        <Empty title="暂无可绘制的真实用量">模型尚未上报，或当前范围没有调用。</Empty>
+      )}
+    </section>
+  );
 }
 function CallDetails({ call, data }: { call: CallDetail; data: Bootstrap }) {
-  const rounds = call.rounds || [call], usage = call.runUsage || call.usage;
-  return <><dl><div><dt>时间</dt><dd>{dateTime(call.startedAt)}</dd></div><div><dt>模型</dt><dd>{call.modelName}</dd></div><div><dt>用途</dt><dd>{purposeNames[call.purpose] || call.purpose}</dd></div><div><dt>群聊</dt><dd>{data.chats.find(chat => chat.id === call.chatId)?.name || (call.chatId ? call.chatId : '非群聊调用')}{call.memberId && <p>成员 ID：{call.memberId}</p>}</dd></div><div><dt>耗时</dt><dd>{duration(call)}</dd></div><div><dt>状态</dt><dd><Badge tone={call.status === 'error' ? 'warn' : 'good'}>{call.status === 'success' ? '成功' : call.status === 'error' ? '失败' : call.status}</Badge>{call.httpStatus && ` · HTTP ${call.httpStatus}`}</dd></div></dl><section className="usage-rounds"><h3>{call.rounds ? '多轮调用逐次累计' : '当前轮调用明细'}</h3>{rounds.map((round, index) => <article key={round.id || index}><div className="section-title"><h3>{round.round || index + 1} · {purposeNames[round.purpose] || round.purpose}</h3><span className="hint">{duration(round)}</span></div><p>输入 {number(round.usage.inputTotal)}　|　缓存读取 {number(round.usage.cacheRead)}　|　输出 {number(round.usage.output)}</p><p>未缓存输入 {number(round.usage.uncachedInput)}　|　缓存写入 {number(round.usage.cacheWrite)}</p><p>推理 {number(round.usage.reasoning)}（已含在输出中）</p><p>本轮费用：{cost(round.cost, round.currency)}</p></article>)}</section><section className="usage-total"><h3>{call.runUsage ? '累计合计' : '本轮合计'}</h3><p>输入 {number(usage.inputTotal)}　输出 {number(usage.output)}</p><p>缓存读取 {number(usage.cacheRead)}　缓存写入 {number(usage.cacheWrite)}</p><p>估算费用：{cost(call.runUsage ? call.runCost : call.cost, call.runCurrency || call.currency)}</p></section><Notice>输入由未缓存输入、缓存读取、缓存写入组成。输出已含推理；服务未上报的用量保持未知。</Notice></>;
+  const rounds = call.rounds || [call],
+    usage = call.runUsage || call.usage;
+  return (
+    <>
+      <dl>
+        <div>
+          <dt>时间</dt>
+          <dd>{dateTime(call.startedAt)}</dd>
+        </div>
+        <div>
+          <dt>模型</dt>
+          <dd>{call.modelName}</dd>
+        </div>
+        <div>
+          <dt>用途</dt>
+          <dd>{purposeNames[call.purpose] || call.purpose}</dd>
+        </div>
+        <div>
+          <dt>群聊</dt>
+          <dd>
+            {data.chats.find((chat) => chat.id === call.chatId)?.name ||
+              (call.chatId ? call.chatId : '非群聊调用')}
+            {call.memberId && <p>成员 ID：{call.memberId}</p>}
+          </dd>
+        </div>
+        <div>
+          <dt>耗时</dt>
+          <dd>{duration(call)}</dd>
+        </div>
+        <div>
+          <dt>状态</dt>
+          <dd>
+            <Badge tone={call.status === 'error' ? 'warn' : 'good'}>
+              {call.status === 'success' ? '成功' : call.status === 'error' ? '失败' : call.status}
+            </Badge>
+            {call.httpStatus && ` · HTTP ${call.httpStatus}`}
+          </dd>
+        </div>
+      </dl>
+      <section className="usage-rounds">
+        <h3>{call.rounds ? '多轮调用逐次累计' : '当前轮调用明细'}</h3>
+        {rounds.map((round, index) => (
+          <article key={round.id || index}>
+            <div className="section-title">
+              <h3>
+                {round.round || index + 1} · {purposeNames[round.purpose] || round.purpose}
+              </h3>
+              <span className="hint">{duration(round)}</span>
+            </div>
+            <p>
+              输入 {number(round.usage.inputTotal)}　|　缓存读取 {number(round.usage.cacheRead)}
+              　|　输出 {number(round.usage.output)}
+            </p>
+            <p>
+              未缓存输入 {number(round.usage.uncachedInput)}　|　缓存写入{' '}
+              {number(round.usage.cacheWrite)}
+            </p>
+            <p>推理 {number(round.usage.reasoning)}（已含在输出中）</p>
+            <p>本轮费用：{cost(round.cost, round.currency)}</p>
+          </article>
+        ))}
+      </section>
+      <section className="usage-total">
+        <h3>{call.runUsage ? '累计合计' : '本轮合计'}</h3>
+        <p>
+          输入 {number(usage.inputTotal)}　输出 {number(usage.output)}
+        </p>
+        <p>
+          缓存读取 {number(usage.cacheRead)}　缓存写入 {number(usage.cacheWrite)}
+        </p>
+        <p>
+          估算费用：
+          {cost(call.runUsage ? call.runCost : call.cost, call.runCurrency || call.currency)}
+        </p>
+      </section>
+      <Notice>
+        输入由未缓存输入、缓存读取、缓存写入组成。输出已含推理；服务未上报的用量保持未知。
+      </Notice>
+    </>
+  );
 }

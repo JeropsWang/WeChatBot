@@ -15,12 +15,22 @@ class ReplyAdapter(FakeAdapter):
         self.probes = 0
 
     def identity_message_observation(self, name, chat_id, session_id, text, runtime):
-        rows = [row for row in self.rows[name] if row.get('_runtimeId') == runtime and row['name'] == text]
+        rows = [
+            row
+            for row in self.rows[name]
+            if row.get('_runtimeId') == runtime and row['name'] == text
+        ]
         if len(rows) != 1:
             return None
-        return {'chatId': chat_id, 'sessionId': session_id, 'runtimeId': runtime,
-                'rect': rows[0]['_rect'], 'textHash': hashlib.sha256(text.encode()).hexdigest(),
-                'imageHash': rows[0].get('_appearance', 'a' * 64), 'visible': True}
+        return {
+            'chatId': chat_id,
+            'sessionId': session_id,
+            'runtimeId': runtime,
+            'rect': rows[0]['_rect'],
+            'textHash': hashlib.sha256(text.encode()).hexdigest(),
+            'imageHash': rows[0].get('_appearance', 'a' * 64),
+            'visible': True,
+        }
 
     def identity_message(self, name, chat_id, session_id, text, runtime, rect, expected=None):
         self.probes += 1
@@ -38,12 +48,18 @@ class ReplyIdentityTests(unittest.TestCase):
         self.store.close()
 
     def arrive(self, group=G2):
-        self.adapter.rows[group['name']].append({**item('@小明 你好'), '_runtimeId': [1, 2], '_rect': [0, 10, 100, 70]})
+        self.adapter.rows[group['name']].append(
+            {**item('@小明 你好'), '_runtimeId': [1, 2], '_rect': [0, 10, 100, 70]}
+        )
         self.engine.poll()
         return self.store.pending()[-1]
 
     def payload(self, event, group=G2):
-        return {'chatId': group['id'], 'bindingKey': group['bindingKey'], 'eventId': event['eventId']}
+        return {
+            'chatId': group['id'],
+            'bindingKey': group['bindingKey'],
+            'eventId': event['eventId'],
+        }
 
     def test_other_enabled_group_and_unrelated_append_still_resolve_once(self):
         event = self.arrive()
@@ -75,13 +91,26 @@ class ReplyIdentityTests(unittest.TestCase):
         self.assertEqual(self.adapter.probes, 0)
 
     def test_confirmed_self_echo_uses_server_event_id(self):
-        self.engine.send({'commandId': 'send-one', 'chatId': G1['id'], 'bindingKey': G1['bindingKey'], 'text': '回复'})
+        self.engine.send(
+            {
+                'commandId': 'send-one',
+                'chatId': G1['id'],
+                'bindingKey': G1['bindingKey'],
+                'text': '回复',
+            }
+        )
         self.assertEqual(self.store.pending()[-1]['eventId'], 'sent-send-one')
 
     def test_snapshot_contains_no_body_and_expired_inbox_is_removed(self):
         event = self.arrive()
         self.assertNotIn('你好', str(self.store.snapshot(G2['id'])))
-        self.store.enqueue({'eventId': 'expired', 'content': '旧正文', 'observedAt': (datetime.now(timezone.utc) - timedelta(days=31)).isoformat()})
+        self.store.enqueue(
+            {
+                'eventId': 'expired',
+                'content': '旧正文',
+                'observedAt': (datetime.now(timezone.utc) - timedelta(days=31)).isoformat(),
+            }
+        )
         self.assertEqual(self.store.expire_inbox(), 1)
         self.assertEqual([e['eventId'] for e in self.store.pending()], [event['eventId']])
 
@@ -89,9 +118,16 @@ class ReplyIdentityTests(unittest.TestCase):
         for clicked, expected_calls in ((False, 2), (True, 1)):
             event = self.arrive()
             calls = []
+
             def probe(*args):
                 calls.append(args)
-                return {'status': 'unknown', 'reason': 'foreground', 'retryable': True, 'clicked': clicked}
+                return {
+                    'status': 'unknown',
+                    'reason': 'foreground',
+                    'retryable': True,
+                    'clicked': clicked,
+                }
+
             self.adapter.identity_message = probe
             result = self.engine.identity_reply(self.payload(event))
             self.assertEqual(result['status'], 'unknown')
@@ -131,6 +167,8 @@ class ReplyIdentityTests(unittest.TestCase):
         self.assertEqual(self.engine.identity_reply(self.payload(event))['status'], 'unknown')
         self.assertEqual(self.adapter.probes, 0)
         event = self.arrive(G1)
-        self.adapter.rows[G1['name']].append({**item('另一个控件'), '_runtimeId': [1, 2], '_rect': [0, 80, 100, 150]})
+        self.adapter.rows[G1['name']].append(
+            {**item('另一个控件'), '_runtimeId': [1, 2], '_rect': [0, 80, 100, 150]}
+        )
         self.assertEqual(self.engine.identity_reply(self.payload(event, G1))['status'], 'unknown')
         self.assertEqual(self.adapter.probes, 0)
