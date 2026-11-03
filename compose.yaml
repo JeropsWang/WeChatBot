@@ -1,0 +1,28 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: liino
+      POSTGRES_PASSWORD: liino_local
+      POSTGRES_DB: liino
+    ports: ['127.0.0.1:54329:5432']
+    volumes: ['postgres-data:/var/lib/postgresql/data']
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U liino']
+      interval: 5s
+      retries: 15
+    restart: unless-stopped
+  redis:
+    image: redis:7-alpine
+    command: ['redis-server', '--appendonly', 'yes', '--maxmemory-policy', 'noeviction']
+    ports: ['127.0.0.1:63799:6379']
+    volumes: ['redis-data:/data']
+    restart: unless-stopped
+  searxng:
+    image: searxng/searxng:latest
+    ports: ['127.0.0.1:43889:8080']
+    volumes: ['./infra/searxng/settings.yml:/etc/searxng/settings.yml:ro']
+    restart: unless-stopped
+volumes:
+  postgres-data:
+  redis-data:

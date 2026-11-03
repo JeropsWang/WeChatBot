@@ -1,0 +1,11 @@
+beautifulsoup4==4.15.0
+comtypes==1.4.17
+Markdown==3.11.2
+pillow==13.0.0
+pyperclip==1.11.0
+python-dotenv==1.2.4
+pywin32==312
+soupsieve==3.0.4
+typing_extensions==4.16.0
+websockets==15.0.1
+wx4py==0.2.1

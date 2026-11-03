@@ -1,0 +1,7 @@
+use_default_settings: true
+server:
+  secret_key: "liino-loopback-local-search-instance"
+  limiter: false
+  image_proxy: false
+search:
+  formats: [html, json]
