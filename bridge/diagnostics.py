@@ -6,16 +6,24 @@ import os
 from pathlib import Path
 
 os.environ.setdefault('WECHAT_LOG_LEVEL', 'ERROR')
-os.environ.setdefault('WECHAT_LOG_FILE', str(Path(__file__).resolve().parent / 'state' / 'wx4py.log'))
+os.environ.setdefault(
+    'WECHAT_LOG_FILE', str(Path(__file__).resolve().parent / 'state' / 'wx4py.log')
+)
 
 
 def process_path(pid):
     import ctypes
     from ctypes import wintypes
+
     kernel = ctypes.WinDLL('kernel32', use_last_error=True)
     kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
     kernel.OpenProcess.restype = wintypes.HANDLE
-    kernel.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+    kernel.QueryFullProcessImageNameW.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.LPWSTR,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
     kernel.QueryFullProcessImageNameW.restype = wintypes.BOOL
     kernel.CloseHandle.argtypes = [wintypes.HANDLE]
     handle = kernel.OpenProcess(0x1000, False, pid)
@@ -24,7 +32,11 @@ def process_path(pid):
     try:
         size = wintypes.DWORD(32768)
         buf = ctypes.create_unicode_buffer(size.value)
-        return buf.value if kernel.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)) else ''
+        return (
+            buf.value
+            if kernel.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size))
+            else ''
+        )
     finally:
         kernel.CloseHandle(handle)
 
@@ -48,7 +60,12 @@ def inventory():
                 file_version = f'{a >> 16}.{a & 65535}.{b >> 16}.{b & 65535}'
             except Exception:
                 file_version = None
-            processes[pid] = {'pid': pid, 'executable': path, 'version': file_version, 'windows': []}
+            processes[pid] = {
+                'pid': pid,
+                'executable': path,
+                'version': file_version,
+                'windows': [],
+            }
         except Exception:
             continue
 
@@ -58,7 +75,11 @@ def inventory():
             if pid not in processes:
                 return True
             cls = win32gui.GetClassName(hwnd)
-            entry = {'hwnd': hwnd, 'className': cls, 'visible': bool(win32gui.IsWindowVisible(hwnd))}
+            entry = {
+                'hwnd': hwnd,
+                'className': cls,
+                'visible': bool(win32gui.IsWindowVisible(hwnd)),
+            }
             # Root/window class and node counts only: no Name, Value, or message text.
             if cls in {'mmui::MainWindow', 'WeChatMainWndForPC'} or entry['visible']:
                 try:
@@ -73,11 +94,25 @@ def inventory():
         return True
 
     win32gui.EnumWindows(window, None)
-    compatible = [(p, w) for p in processes.values() for w in p['windows']
-                  if w.get('uiaClassName', w['className']) == 'mmui::MainWindow' and w['visible'] and w.get('uiaNodeCount', 0) >= 5]
-    return {'observedAt': datetime.now(timezone.utc).isoformat(), 'wx4py': version('wx4py'),
-            'processes': list(processes.values()), 'safeAttachCandidates': len(compatible),
-            'supported': len(compatible) == 1,
-            'detail': ('现有微信4.x主窗口可安全绑定' if len(compatible) == 1 else
-                       '未找到唯一且UIA节点可用的微信4.x主窗口；未修改注册表、辅助功能标志或重启微信'),
-            'readChatContent': False, 'changedSystemSettings': False}
+    compatible = [
+        (p, w)
+        for p in processes.values()
+        for w in p['windows']
+        if w.get('uiaClassName', w['className']) == 'mmui::MainWindow'
+        and w['visible']
+        and w.get('uiaNodeCount', 0) >= 5
+    ]
+    return {
+        'observedAt': datetime.now(timezone.utc).isoformat(),
+        'wx4py': version('wx4py'),
+        'processes': list(processes.values()),
+        'safeAttachCandidates': len(compatible),
+        'supported': len(compatible) == 1,
+        'detail': (
+            '现有微信4.x主窗口可安全绑定'
+            if len(compatible) == 1
+            else '未找到唯一且UIA节点可用的微信4.x主窗口；未修改注册表、辅助功能标志或重启微信'
+        ),
+        'readChatContent': False,
+        'changedSystemSettings': False,
+    }

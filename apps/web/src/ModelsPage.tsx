@@ -5,31 +5,502 @@ import { api, useAction, type Bootstrap, type ModelConfig, type SaveSettings } f
 import { UsagePanel } from './UsagePanel';
 import { Badge, Button, Confirm, Empty, Feedback, Field, Modal, PageHeading, Toggle } from './ui';
 
-const blankModel = { name: '', protocol: 'openai-compatible' as ModelConfig['protocol'], model: '', baseUrl: 'https://api.openai.com/v1', contextWindow: 32768, supportsTools: true, supportsVision: false, apiKey: '', clearApiKey: false };
-export function ModelsPage(props: { data: Bootstrap; refresh: () => Promise<void>; revision: number; saveSettings: SaveSettings; onDirty: (dirty: boolean) => void }) {
-  const [tab, setTab] = useState('settings'), dirty = useRef(false);
-  const markDirty = useCallback((value: boolean) => { dirty.current = value; props.onDirty(value); }, [props.onDirty]);
-  return <main className="standard-page models-page" id="main-content"><PageHeading title="模型" description="配置对话模型，查看真实 Token 用量、缓存和调用明细。" /><div className="tabs" role="tablist" aria-label="模型">{[['settings', '模型配置'], ['usage', 'Token与缓存']].map(([id, label]) => <button key={id} role="tab" aria-selected={tab === id} onClick={() => { if (dirty.current && !window.confirm('模型分工尚未保存。放弃并切换？')) return; markDirty(false); setTab(id); }}>{label}</button>)}</div>{tab === 'settings' ? <ModelSettings {...props} onDirty={markDirty} /> : <UsagePanel data={props.data} revision={props.revision} />}</main>;
+const blankModel = {
+  name: '',
+  protocol: 'openai-compatible' as ModelConfig['protocol'],
+  model: '',
+  baseUrl: 'https://api.openai.com/v1',
+  contextWindow: 32768,
+  supportsTools: true,
+  supportsVision: false,
+  apiKey: '',
+  clearApiKey: false,
+};
+export function ModelsPage(props: {
+  data: Bootstrap;
+  refresh: () => Promise<void>;
+  revision: number;
+  saveSettings: SaveSettings;
+  onDirty: (dirty: boolean) => void;
+}) {
+  const [tab, setTab] = useState('settings'),
+    dirty = useRef(false);
+  const markDirty = useCallback(
+    (value: boolean) => {
+      dirty.current = value;
+      props.onDirty(value);
+    },
+    [props.onDirty],
+  );
+  return (
+    <main className="standard-page models-page" id="main-content">
+      <PageHeading title="模型" description="配置对话模型，查看真实 Token 用量、缓存和调用明细。" />
+      <div className="tabs" role="tablist" aria-label="模型">
+        {[
+          ['settings', '模型配置'],
+          ['usage', 'Token与缓存'],
+        ].map(([id, label]) => (
+          <button
+            key={id}
+            role="tab"
+            aria-selected={tab === id}
+            onClick={() => {
+              if (dirty.current && !window.confirm('模型分工尚未保存。放弃并切换？')) return;
+              markDirty(false);
+              setTab(id);
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {tab === 'settings' ? (
+        <ModelSettings {...props} onDirty={markDirty} />
+      ) : (
+        <UsagePanel data={props.data} revision={props.revision} />
+      )}
+    </main>
+  );
 }
-function ModelSettings({ data, refresh, saveSettings, onDirty }: { data: Bootstrap; refresh: () => Promise<void>; saveSettings: SaveSettings; onDirty: (dirty: boolean) => void }) {
-  const [edit, setEdit] = useState<ModelConfig | 'new'>(), [remove, setRemove] = useState<ModelConfig>(), [testResult, setTestResult] = useState<{ name: string; text: string; milliseconds: number }>();
-  const [roles, setRoles] = useState({ chatModelId: data.settings.chatModelId, decisionModelId: data.settings.decisionModelId, memoryModelId: data.settings.memoryModelId, visionModelId: data.settings.visionModelId || '' }), [dirty, setDirty] = useState(false), action = useAction();
-  useEffect(() => { if (!dirty) setRoles({ chatModelId: data.settings.chatModelId, decisionModelId: data.settings.decisionModelId, memoryModelId: data.settings.memoryModelId, visionModelId: data.settings.visionModelId || '' }); }, [data.settings, dirty]);
-  useEffect(() => { onDirty(dirty); return () => onDirty(false); }, [dirty, onDirty]);
-  return <div className="model-settings"><div className="toolbar"><h2>模型配置</h2><Button variant="primary" onClick={() => setEdit('new')}><Plus size={19} />添加模型</Button></div>
-    <Feedback error={action.error} success={action.success} />
-    <section className="page-section model-list">{data.models.length ? data.models.map(model => <article className="model-item" key={model.id}><div className="model-icon"><Cube size={28} /></div><div className="model-info"><div className="section-title"><h2>{model.name}</h2>{data.settings.chatModelId === model.id && <Badge tone="accent">对话模型</Badge>}</div><p>{model.model}</p><span className="hint endpoint-text">{model.baseUrl}</span><div className="model-meta"><span>{model.protocol}</span><span>{model.contextWindow.toLocaleString()} 上下文</span><span>{model.supportsTools ? '支持工具调用' : '不启用工具调用'}</span><span>{model.hasApiKey ? '密钥已配置' : '未设置密钥'}</span></div></div><div className="model-actions"><Button busy={action.busy} onClick={() => action.run(async () => { const result = await api<{ text: string; milliseconds: number }>(`/api/models/${model.id}/test`, 'POST', {}); setTestResult({ ...result, name: model.name }); })}><PlugsConnected size={17} />测试连接</Button><button className="icon-button" onClick={() => setEdit(model)} aria-label={`编辑 ${model.name}`}><PencilSimple size={20} /></button><button className="icon-button danger-text" onClick={() => setRemove(model)} aria-label={`删除 ${model.name}`}><Trash size={20} /></button></div></article>) : <Empty title="从第一个模型开始">添加 API 地址与模型标识。也可以连接 Ollama 等本机 OpenAI 兼容服务。</Empty>}</section>
-    <section className="surface page-section"><h2>模型分工</h2><p className="hint">对话模型是默认选择；参与判断、记忆整理和图片识别可单独选择；识图模型需要支持视觉。</p><form onSubmit={e => { e.preventDefault(); void action.run(async () => { await saveSettings(roles); setDirty(false); }, '模型分工已保存。'); }}><div className="form-grid three">{([['chatModelId', '对话回复'], ['decisionModelId', '参与判断'], ['memoryModelId', '记忆整理'], ['visionModelId', '图片识别']] as const).map(([key, label]) => <Field key={key} label={label}><select value={roles[key]} onChange={e => { setRoles(r => ({ ...r, [key]: e.target.value })); setDirty(true); }}><option value="">{key === 'chatModelId' ? '请选择对话模型' : key === 'visionModelId' ? '复用支持视觉的对话模型' : '与对话模型相同'}</option>{data.models.filter(m => key !== 'visionModelId' || m.supportsVision).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</select></Field>)}</div><Button type="submit" variant="primary" busy={action.busy}><FloppyDisk size={18} />保存模型分工</Button></form></section>
-    <div className="help-copy"><h3>云端与本地，使用同一份配置。</h3><p>DeepSeek、通义千问、智谱、Kimi 等可按服务商文档填写 OpenAI 兼容地址。Ollama 常见地址为 http://127.0.0.1:11434/v1，请填写本机已经安装的模型标识。连接是否可用，以实际测试结果为准。</p><p>向量模型在“知识与记忆”中单独设置，不占用这三个对话分工。</p></div>
-    {edit && <ModelDialog model={edit === 'new' ? undefined : edit} onClose={() => setEdit(undefined)} onSaved={async () => { await refresh(); setEdit(undefined); action.setSuccess('模型已保存，请测试连接并设置模型分工。'); }} />}
-    {remove && <Confirm title="删除模型" confirm="删除模型" danger onClose={() => setRemove(undefined)} onConfirm={async () => { await api(`/api/models/${remove.id}`, 'DELETE'); await refresh(); }}>删除「{remove.name}」及其密钥。使用此模型的分工将清空，需要重新选择。</Confirm>}
-    {testResult && <Modal title={`${testResult.name} · 连接测试`} onClose={() => setTestResult(undefined)}><Badge tone="good">测试完成 · {testResult.milliseconds} ms</Badge><p className="test-response">{testResult.text || '模型没有返回文字。'}</p><p className="hint">以上文字由所选模型在本次连接测试中实际返回。</p></Modal>}
-  </div>;
+function ModelSettings({
+  data,
+  refresh,
+  saveSettings,
+  onDirty,
+}: {
+  data: Bootstrap;
+  refresh: () => Promise<void>;
+  saveSettings: SaveSettings;
+  onDirty: (dirty: boolean) => void;
+}) {
+  const [edit, setEdit] = useState<ModelConfig | 'new'>(),
+    [remove, setRemove] = useState<ModelConfig>(),
+    [testResult, setTestResult] = useState<{ name: string; text: string; milliseconds: number }>();
+  const [roles, setRoles] = useState({
+      chatModelId: data.settings.chatModelId,
+      decisionModelId: data.settings.decisionModelId,
+      memoryModelId: data.settings.memoryModelId,
+      visionModelId: data.settings.visionModelId || '',
+    }),
+    [dirty, setDirty] = useState(false),
+    action = useAction();
+  useEffect(() => {
+    if (!dirty)
+      setRoles({
+        chatModelId: data.settings.chatModelId,
+        decisionModelId: data.settings.decisionModelId,
+        memoryModelId: data.settings.memoryModelId,
+        visionModelId: data.settings.visionModelId || '',
+      });
+  }, [data.settings, dirty]);
+  useEffect(() => {
+    onDirty(dirty);
+    return () => onDirty(false);
+  }, [dirty, onDirty]);
+  return (
+    <div className="model-settings">
+      <div className="toolbar">
+        <h2>模型配置</h2>
+        <Button variant="primary" onClick={() => setEdit('new')}>
+          <Plus size={19} />
+          添加模型
+        </Button>
+      </div>
+      <Feedback error={action.error} success={action.success} />
+      <section className="page-section model-list">
+        {data.models.length ? (
+          data.models.map((model) => (
+            <article className="model-item" key={model.id}>
+              <div className="model-icon">
+                <Cube size={28} />
+              </div>
+              <div className="model-info">
+                <div className="section-title">
+                  <h2>{model.name}</h2>
+                  {data.settings.chatModelId === model.id && <Badge tone="accent">对话模型</Badge>}
+                </div>
+                <p>{model.model}</p>
+                <span className="hint endpoint-text">{model.baseUrl}</span>
+                <div className="model-meta">
+                  <span>{model.protocol}</span>
+                  <span>{model.contextWindow.toLocaleString()} 上下文</span>
+                  <span>{model.supportsTools ? '支持工具调用' : '不启用工具调用'}</span>
+                  <span>{model.hasApiKey ? '密钥已配置' : '未设置密钥'}</span>
+                </div>
+              </div>
+              <div className="model-actions">
+                <Button
+                  busy={action.busy}
+                  onClick={() =>
+                    action.run(async () => {
+                      const result = await api<{ text: string; milliseconds: number }>(
+                        `/api/models/${model.id}/test`,
+                        'POST',
+                        {},
+                      );
+                      setTestResult({ ...result, name: model.name });
+                    })
+                  }
+                >
+                  <PlugsConnected size={17} />
+                  测试连接
+                </Button>
+                <button
+                  className="icon-button"
+                  onClick={() => setEdit(model)}
+                  aria-label={`编辑 ${model.name}`}
+                >
+                  <PencilSimple size={20} />
+                </button>
+                <button
+                  className="icon-button danger-text"
+                  onClick={() => setRemove(model)}
+                  aria-label={`删除 ${model.name}`}
+                >
+                  <Trash size={20} />
+                </button>
+              </div>
+            </article>
+          ))
+        ) : (
+          <Empty title="从第一个模型开始">
+            添加 API 地址与模型标识。也可以连接 Ollama 等本机 OpenAI 兼容服务。
+          </Empty>
+        )}
+      </section>
+      <section className="surface page-section">
+        <h2>模型分工</h2>
+        <p className="hint">
+          对话模型是默认选择；参与判断、记忆整理和图片识别可单独选择；识图模型需要支持视觉。
+        </p>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void action.run(async () => {
+              await saveSettings(roles);
+              setDirty(false);
+            }, '模型分工已保存。');
+          }}
+        >
+          <div className="form-grid three">
+            {(
+              [
+                ['chatModelId', '对话回复'],
+                ['decisionModelId', '参与判断'],
+                ['memoryModelId', '记忆整理'],
+                ['visionModelId', '图片识别'],
+              ] as const
+            ).map(([key, label]) => (
+              <Field key={key} label={label}>
+                <select
+                  value={roles[key]}
+                  onChange={(e) => {
+                    setRoles((r) => ({ ...r, [key]: e.target.value }));
+                    setDirty(true);
+                  }}
+                >
+                  <option value="">
+                    {key === 'chatModelId'
+                      ? '请选择对话模型'
+                      : key === 'visionModelId'
+                        ? '复用支持视觉的对话模型'
+                        : '与对话模型相同'}
+                  </option>
+                  {data.models
+                    .filter((m) => key !== 'visionModelId' || m.supportsVision)
+                    .map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name}
+                      </option>
+                    ))}
+                </select>
+              </Field>
+            ))}
+          </div>
+          <Button type="submit" variant="primary" busy={action.busy}>
+            <FloppyDisk size={18} />
+            保存模型分工
+          </Button>
+        </form>
+      </section>
+      <div className="help-copy">
+        <h3>云端与本地，使用同一份配置。</h3>
+        <p>
+          DeepSeek、通义千问、智谱、Kimi 等可按服务商文档填写 OpenAI 兼容地址。Ollama 常见地址为
+          http://127.0.0.1:11434/v1，请填写本机已经安装的模型标识。连接是否可用，以实际测试结果为准。
+        </p>
+        <p>向量模型在“知识与记忆”中单独设置，不占用这三个对话分工。</p>
+      </div>
+      {edit && (
+        <ModelDialog
+          model={edit === 'new' ? undefined : edit}
+          onClose={() => setEdit(undefined)}
+          onSaved={async () => {
+            await refresh();
+            setEdit(undefined);
+            action.setSuccess('模型已保存，请测试连接并设置模型分工。');
+          }}
+        />
+      )}
+      {remove && (
+        <Confirm
+          title="删除模型"
+          confirm="删除模型"
+          danger
+          onClose={() => setRemove(undefined)}
+          onConfirm={async () => {
+            await api(`/api/models/${remove.id}`, 'DELETE');
+            await refresh();
+          }}
+        >
+          删除「{remove.name}」及其密钥。使用此模型的分工将清空，需要重新选择。
+        </Confirm>
+      )}
+      {testResult && (
+        <Modal title={`${testResult.name} · 连接测试`} onClose={() => setTestResult(undefined)}>
+          <Badge tone="good">测试完成 · {testResult.milliseconds} ms</Badge>
+          <p className="test-response">{testResult.text || '模型没有返回文字。'}</p>
+          <p className="hint">以上文字由所选模型在本次连接测试中实际返回。</p>
+        </Modal>
+      )}
+    </div>
+  );
 }
-function ModelDialog({ model, onClose, onSaved }: { model?: ModelConfig; onClose: () => void; onSaved: () => Promise<void> }) {
-  const [form, setForm] = useState({ ...blankModel, ...model, apiKey: '', clearApiKey: false }), [dirty, setDirty] = useState(false), action = useAction();
-  const [pricingEnabled, setPricingEnabled] = useState(!!model?.pricing), [pricing, setPricing] = useState({ inputPerMillion: model?.pricing?.inputPerMillion?.toString() || '', outputPerMillion: model?.pricing?.outputPerMillion?.toString() || '', cacheReadPerMillion: model?.pricing?.cacheReadPerMillion?.toString() || '', cacheWritePerMillion: model?.pricing?.cacheWritePerMillion?.toString() || '', currency: model?.pricing?.currency || '' });
-  const change = (key: string, value: string | number | boolean) => { setForm(p => ({ ...p, [key]: value })); setDirty(true); };
-  const close = () => { if (!action.busy && (!dirty || window.confirm('放弃尚未保存的模型修改？'))) onClose(); };
-  return <Modal title={model ? '编辑模型' : '添加模型'} onClose={close} wide><form onSubmit={e => { e.preventDefault(); void action.run(async () => { const { id, hasApiKey, ...body } = form as typeof form & { id?: string }; await api(model ? `/api/models/${model.id}` : '/api/models', model ? 'PUT' : 'POST', { ...body, apiKey: form.apiKey || undefined, pricing: pricingEnabled ? { currency: pricing.currency, inputPerMillion: Number(pricing.inputPerMillion), outputPerMillion: Number(pricing.outputPerMillion), ...(pricing.cacheReadPerMillion !== '' ? {cacheReadPerMillion: Number(pricing.cacheReadPerMillion)} : {}), ...(pricing.cacheWritePerMillion !== '' ? {cacheWritePerMillion: Number(pricing.cacheWritePerMillion)} : {}) } : null }); setForm(p => ({ ...p, apiKey: '' })); await onSaved(); }); }}><div className="preset-row"><span>快速填写</span><Button type="button" onClick={() => { setForm(p => ({ ...p, protocol: 'openai-compatible', baseUrl: 'http://127.0.0.1:11434/v1', apiKey: '' })); setDirty(true); }}>本机 Ollama 地址</Button><Button type="button" onClick={() => { setForm(p => ({ ...p, protocol: 'openai-compatible', baseUrl: 'https://api.openai.com/v1' })); setDirty(true); }}>云端兼容服务</Button></div><div className="form-grid"><Field label="配置名称"><input required maxLength={100} value={form.name} onChange={e => change('name', e.target.value)} placeholder="便于辨认的名称" /></Field><Field label="接口协议"><select value={form.protocol} onChange={e => change('protocol', e.target.value)}><option value="openai-compatible">OpenAI 兼容</option><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option><option value="google">Google</option></select></Field></div><Field label="API 地址"><input type="url" required value={form.baseUrl} onChange={e => change('baseUrl', e.target.value)} placeholder="http://127.0.0.1:11434/v1" /></Field><div className="form-grid"><Field label="模型标识" hint="填写服务提供的精确模型名称。"><input required maxLength={200} value={form.model} onChange={e => change('model', e.target.value)} placeholder="模型名称或 ID" /></Field><Field label="上下文窗口（tokens）"><input type="number" min={2048} max={2000000} required value={form.contextWindow} onChange={e => change('contextWindow', Number(e.target.value))} /></Field></div><Field label="API 密钥" hint={model?.hasApiKey ? '已配置。留空保留现有密钥，输入新值会替换。' : '本机服务通常可留空；云端服务请填写密钥。'}><input type="password" autoComplete="off" value={form.apiKey} onChange={e => change('apiKey', e.target.value)} placeholder={model?.hasApiKey ? '已配置，留空不修改' : '输入 API 密钥'} /></Field>{model?.hasApiKey && <label className="checkbox-label"><input type="checkbox" checked={form.clearApiKey} onChange={e => change('clearApiKey', e.target.checked)} />清除已保存的密钥</label>}<Toggle label="支持工具调用" hint="仅在服务与模型支持工具调用时开启。" checked={form.supportsTools} onChange={v => change('supportsTools', v)} /><Toggle label="支持图片理解" hint="仅在服务实际支持图片输入时开启；AI 素材标注需要此能力。" checked={form.supportsVision} onChange={value => change('supportsVision', value)} /><section className="pricing-form"><h3>用量价格（每 100 万 Token）</h3><Toggle label="配置估算价格" hint="未配置时费用显示未知。请按服务商实际账单填写，缓存价格可留空。" checked={pricingEnabled} onChange={value => { setPricingEnabled(value); setDirty(true); }} />{pricingEnabled && <><Field label="币种"><input required maxLength={12} value={pricing.currency} placeholder="例如 CNY 或 USD" onChange={e => { setPricing(previous => ({...previous, currency: e.target.value})); setDirty(true); }} /></Field><div className="form-grid">{([['inputPerMillion','未缓存输入'],['outputPerMillion','输出'],['cacheReadPerMillion','缓存读取'],['cacheWritePerMillion','缓存写入']] as const).map(([key,label]) => <Field key={key} label={label}><input type="number" min="0" step="any" required={key === 'inputPerMillion' || key === 'outputPerMillion'} value={pricing[key]} onChange={e => { setPricing(previous => ({...previous,[key]:e.target.value})); setDirty(true); }} /></Field>)}</div></>}</section><Feedback error={action.error} /><div className="dialog-actions"><Button type="button" onClick={close}>取消</Button><Button type="submit" variant="primary" busy={action.busy}>保存模型</Button></div></form></Modal>;
+function ModelDialog({
+  model,
+  onClose,
+  onSaved,
+}: {
+  model?: ModelConfig;
+  onClose: () => void;
+  onSaved: () => Promise<void>;
+}) {
+  const [form, setForm] = useState({ ...blankModel, ...model, apiKey: '', clearApiKey: false }),
+    [dirty, setDirty] = useState(false),
+    action = useAction();
+  const [pricingEnabled, setPricingEnabled] = useState(!!model?.pricing),
+    [pricing, setPricing] = useState({
+      inputPerMillion: model?.pricing?.inputPerMillion?.toString() || '',
+      outputPerMillion: model?.pricing?.outputPerMillion?.toString() || '',
+      cacheReadPerMillion: model?.pricing?.cacheReadPerMillion?.toString() || '',
+      cacheWritePerMillion: model?.pricing?.cacheWritePerMillion?.toString() || '',
+      currency: model?.pricing?.currency || '',
+    });
+  const change = (key: string, value: string | number | boolean) => {
+    setForm((p) => ({ ...p, [key]: value }));
+    setDirty(true);
+  };
+  const close = () => {
+    if (!action.busy && (!dirty || window.confirm('放弃尚未保存的模型修改？'))) onClose();
+  };
+  return (
+    <Modal title={model ? '编辑模型' : '添加模型'} onClose={close} wide>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          void action.run(async () => {
+            const { id, hasApiKey, ...body } = form as typeof form & { id?: string };
+            await api(model ? `/api/models/${model.id}` : '/api/models', model ? 'PUT' : 'POST', {
+              ...body,
+              apiKey: form.apiKey || undefined,
+              pricing: pricingEnabled
+                ? {
+                    currency: pricing.currency,
+                    inputPerMillion: Number(pricing.inputPerMillion),
+                    outputPerMillion: Number(pricing.outputPerMillion),
+                    ...(pricing.cacheReadPerMillion !== ''
+                      ? { cacheReadPerMillion: Number(pricing.cacheReadPerMillion) }
+                      : {}),
+                    ...(pricing.cacheWritePerMillion !== ''
+                      ? { cacheWritePerMillion: Number(pricing.cacheWritePerMillion) }
+                      : {}),
+                  }
+                : null,
+            });
+            setForm((p) => ({ ...p, apiKey: '' }));
+            await onSaved();
+          });
+        }}
+      >
+        <div className="preset-row">
+          <span>快速填写</span>
+          <Button
+            type="button"
+            onClick={() => {
+              setForm((p) => ({
+                ...p,
+                protocol: 'openai-compatible',
+                baseUrl: 'http://127.0.0.1:11434/v1',
+                apiKey: '',
+              }));
+              setDirty(true);
+            }}
+          >
+            本机 Ollama 地址
+          </Button>
+          <Button
+            type="button"
+            onClick={() => {
+              setForm((p) => ({
+                ...p,
+                protocol: 'openai-compatible',
+                baseUrl: 'https://api.openai.com/v1',
+              }));
+              setDirty(true);
+            }}
+          >
+            云端兼容服务
+          </Button>
+        </div>
+        <div className="form-grid">
+          <Field label="配置名称">
+            <input
+              required
+              maxLength={100}
+              value={form.name}
+              onChange={(e) => change('name', e.target.value)}
+              placeholder="便于辨认的名称"
+            />
+          </Field>
+          <Field label="接口协议">
+            <select value={form.protocol} onChange={(e) => change('protocol', e.target.value)}>
+              <option value="openai-compatible">OpenAI 兼容</option>
+              <option value="openai">OpenAI</option>
+              <option value="anthropic">Anthropic</option>
+              <option value="google">Google</option>
+            </select>
+          </Field>
+        </div>
+        <Field label="API 地址">
+          <input
+            type="url"
+            required
+            value={form.baseUrl}
+            onChange={(e) => change('baseUrl', e.target.value)}
+            placeholder="http://127.0.0.1:11434/v1"
+          />
+        </Field>
+        <div className="form-grid">
+          <Field label="模型标识" hint="填写服务提供的精确模型名称。">
+            <input
+              required
+              maxLength={200}
+              value={form.model}
+              onChange={(e) => change('model', e.target.value)}
+              placeholder="模型名称或 ID"
+            />
+          </Field>
+          <Field label="上下文窗口（tokens）">
+            <input
+              type="number"
+              min={2048}
+              max={2000000}
+              required
+              value={form.contextWindow}
+              onChange={(e) => change('contextWindow', Number(e.target.value))}
+            />
+          </Field>
+        </div>
+        <Field
+          label="API 密钥"
+          hint={
+            model?.hasApiKey
+              ? '已配置。留空保留现有密钥，输入新值会替换。'
+              : '本机服务通常可留空；云端服务请填写密钥。'
+          }
+        >
+          <input
+            type="password"
+            autoComplete="off"
+            value={form.apiKey}
+            onChange={(e) => change('apiKey', e.target.value)}
+            placeholder={model?.hasApiKey ? '已配置，留空不修改' : '输入 API 密钥'}
+          />
+        </Field>
+        {model?.hasApiKey && (
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              checked={form.clearApiKey}
+              onChange={(e) => change('clearApiKey', e.target.checked)}
+            />
+            清除已保存的密钥
+          </label>
+        )}
+        <Toggle
+          label="支持工具调用"
+          hint="仅在服务与模型支持工具调用时开启。"
+          checked={form.supportsTools}
+          onChange={(v) => change('supportsTools', v)}
+        />
+        <Toggle
+          label="支持图片理解"
+          hint="仅在服务实际支持图片输入时开启；AI 素材标注需要此能力。"
+          checked={form.supportsVision}
+          onChange={(value) => change('supportsVision', value)}
+        />
+        <section className="pricing-form">
+          <h3>用量价格（每 100 万 Token）</h3>
+          <Toggle
+            label="配置估算价格"
+            hint="未配置时费用显示未知。请按服务商实际账单填写，缓存价格可留空。"
+            checked={pricingEnabled}
+            onChange={(value) => {
+              setPricingEnabled(value);
+              setDirty(true);
+            }}
+          />
+          {pricingEnabled && (
+            <>
+              <Field label="币种">
+                <input
+                  required
+                  maxLength={12}
+                  value={pricing.currency}
+                  placeholder="例如 CNY 或 USD"
+                  onChange={(e) => {
+                    setPricing((previous) => ({ ...previous, currency: e.target.value }));
+                    setDirty(true);
+                  }}
+                />
+              </Field>
+              <div className="form-grid">
+                {(
+                  [
+                    ['inputPerMillion', '未缓存输入'],
+                    ['outputPerMillion', '输出'],
+                    ['cacheReadPerMillion', '缓存读取'],
+                    ['cacheWritePerMillion', '缓存写入'],
+                  ] as const
+                ).map(([key, label]) => (
+                  <Field key={key} label={label}>
+                    <input
+                      type="number"
+                      min="0"
+                      step="any"
+                      required={key === 'inputPerMillion' || key === 'outputPerMillion'}
+                      value={pricing[key]}
+                      onChange={(e) => {
+                        setPricing((previous) => ({ ...previous, [key]: e.target.value }));
+                        setDirty(true);
+                      }}
+                    />
+                  </Field>
+                ))}
+              </div>
+            </>
+          )}
+        </section>
+        <Feedback error={action.error} />
+        <div className="dialog-actions">
+          <Button type="button" onClick={close}>
+            取消
+          </Button>
+          <Button type="submit" variant="primary" busy={action.busy}>
+            保存模型
+          </Button>
+        </div>
+      </form>
+    </Modal>
+  );
 }

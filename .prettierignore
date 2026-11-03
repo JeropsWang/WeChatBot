@@ -1,0 +1,8 @@
+artifacts/
+backups/
+data/
+**/node_modules/
+**/dist/
+.venv*/
+package-lock.json
+apps/web/package-lock.json

@@ -134,3 +134,9 @@ npm --prefix apps/web run test:sites
 ## 许可证与致谢
 
 自有源码按 [GNU AGPL v3 或更新版本](LICENSE) 发布，不附保证。第三方代码、模型权重、数据及素材保留各自许可证；软件许可证不授予微信商标或用户素材权利。感谢 Pi、wx4py、OpenCLIP、React、Fastify、BullMQ 及其他依赖作者。实际集成、思路参考和适配来源分别列在 [第三方声明](THIRD_PARTY_NOTICES.md)。
+
+## 读代码与维护
+
+- [数据库字段与设计目的](docs/database.md)：按 PostgreSQL / 桥接 SQLite 的实际结构逐字段说明。
+- [注释核对记录](docs/comment-review.md)：本轮对 app.ts 注释思路的更正与依据。
+- `npm run format` / `npm run format:check`：展开紧凑代码并保持统一排版。

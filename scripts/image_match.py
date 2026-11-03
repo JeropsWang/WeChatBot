@@ -1,4 +1,5 @@
 """Local OpenCLIP experiment. Emits JSON; never calls an LLM or sends chat messages."""
+
 from __future__ import annotations
 
 import argparse
@@ -18,6 +19,9 @@ DEFAULT_PRETRAINED = "laion2b_s34b_b79k"
 
 
 def cosine_similarity(a: Iterable[float], b: Iterable[float]) -> float:
+    """计算两个有限、同维、非零向量的余弦相似度并夹紧到 [-1,1]。
+    这是未经校准的相似度，不是识别概率；非法值直接报错，不能把 NaN 变成触发结果。
+    """
     a, b = list(a), list(b)
     if not a or len(a) != len(b) or not all(math.isfinite(x) for x in a + b):
         raise ValueError("Features must be nonempty, finite, and have equal dimensions")
@@ -28,22 +32,34 @@ def cosine_similarity(a: Iterable[float], b: Iterable[float]) -> float:
 
 
 def match_features(query, references, threshold=0.75, exclude_ids=None):
+    """对参考特征排序并返回前五项；可排除同像素样本以避免评估时自匹配。
+    触发条件严格使用大于 threshold，等于不触发；空图库没有最佳项，因此 trigger 为 false。
+    """
     if not math.isfinite(threshold) or not 0 <= threshold <= 1:
         raise ValueError("Threshold must be between 0 and 1")
     # Validate the query even if the gallery is empty.
     cosine_similarity(query, query)
     excluded = set(exclude_ids or ())
     matches = sorted(
-        [{"referenceId": ref["id"], "category": ref["category"],
-          "similarity": cosine_similarity(query, ref["features"])}
-         for ref in references if ref["id"] not in excluded],
+        [
+            {
+                "referenceId": ref["id"],
+                "category": ref["category"],
+                "similarity": cosine_similarity(query, ref["features"]),
+            }
+            for ref in references
+            if ref["id"] not in excluded
+        ],
         key=lambda item: (-item["similarity"], item["referenceId"]),
     )
     best = matches[0] if matches else None
     return {
-        "status": "ok", "metric": "cosine_similarity", "calibrated": False,
+        "status": "ok",
+        "metric": "cosine_similarity",
+        "calibrated": False,
         "similarity": best["similarity"] if best else None,
-        "threshold": threshold, "comparison": ">",
+        "threshold": threshold,
+        "comparison": ">",
         "trigger": bool(best and best["similarity"] > threshold),
         "matchedReference": best["referenceId"] if best else None,
         "category": best["category"] if best else None,
@@ -52,6 +68,9 @@ def match_features(query, references, threshold=0.75, exclude_ids=None):
 
 
 def load_manifest(path):
+    """读取 1–500 张参考图的清单，检查非空唯一 ID 和类别，并把相对路径锚定在清单目录。
+    它只准备元数据，不加载图像或权重；空图库由服务端禁用，不应启动这个编码工作进程。
+    """
     path = Path(path).resolve()
     document = json.loads(path.read_text(encoding="utf-8-sig"))
     references = document.get("references", [])
@@ -79,9 +98,12 @@ def read_image(path, crop=None):
             raise ValueError("Image exceeds 16 megapixels")
         image = ImageOps.exif_transpose(source).convert("RGB")
     if crop is not None:
-        if (len(crop) != 4 or any(type(v) is not int for v in crop)
-                or not 0 <= crop[0] < crop[2] <= image.width
-                or not 0 <= crop[1] < crop[3] <= image.height):
+        if (
+            len(crop) != 4
+            or any(type(v) is not int for v in crop)
+            or not 0 <= crop[0] < crop[2] <= image.width
+            or not 0 <= crop[1] < crop[3] <= image.height
+        ):
             raise ValueError("Crop must be [left, top, right, bottom] inside the image")
         image = image.crop(crop)
     return image
@@ -92,6 +114,10 @@ def pixel_digest(image):
 
 
 class Encoder:
+    """驻留本地图像编码器，缓存目录限定在项目 data/image-match/models。
+    只有 args.allow_download 显式允许时才开放公共权重下载；日常 serve 默认离线，绝不上传用户图片。
+    """
+
     def __init__(self, args):
         # Keep all downloaded weights inside the project, apart from the bridge env.
         cache = ROOT / "data" / "image-match" / "models"
@@ -105,49 +131,76 @@ class Encoder:
         torch.set_num_threads(max(1, min(4, os.cpu_count() or 1)))
         self.device = args.device
         self.model, _, self.preprocess = open_clip.create_model_and_transforms(
-            args.model, pretrained=args.weights or args.pretrained,
-            device=self.device, cache_dir=str(cache),
+            args.model,
+            pretrained=args.weights or args.pretrained,
+            device=self.device,
+            cache_dir=str(cache),
         )
         self.model.eval()
 
     def encode(self, images):
+        """在 torch.inference_mode 下每批最多编码四张图并返回归一化特征列表。
+        eval 与 inference_mode 分别控制模型推理行为和梯度记录；分批限制 CPU 内存峰值，不改变相似度判定。
+        """
         with self.torch.inference_mode():
             # Small batches keep the CPU experiment's peak memory bounded.
             features = []
             for start in range(0, len(images), 4):
-                batch = self.torch.stack([self.preprocess(img) for img in images[start:start + 4]])
+                batch = self.torch.stack(
+                    [self.preprocess(img) for img in images[start : start + 4]]
+                )
                 values = self.model.encode_image(batch.to(self.device), normalize=True)
                 features.extend(values.cpu().float().tolist())
             return features
 
 
 def prepare_gallery(args):
+    """加载图库并分批生成参考特征；服务模式不保留全部解码图以控制内存。
+    评估模式额外返回图像与像素摘要供留出/变换测试，元数据只包含模型配置与参考数量。
+    """
     references = load_manifest(args.manifest)
     encoder = Encoder(args)
     images, hashes = [], []
     # A user gallery can contain 500 large images. Decode only one encoder batch
     # at a time in the long-lived worker; evaluation still retains its probes.
     for start in range(0, len(references), 4):
-        batch = references[start:start + 4]
+        batch = references[start : start + 4]
         decoded = [read_image(ref["path"], ref.get("crop")) for ref in batch]
         for ref, features in zip(batch, encoder.encode(decoded)):
             ref["features"] = features
         if args.command != "serve":
             images.extend(decoded)
             hashes.extend(pixel_digest(image) for image in decoded)
-    metadata = {"model": args.model, "pretrained": args.pretrained if not args.weights else "local-weights",
-                "device": args.device, "referenceCount": len(references)}
+    metadata = {
+        "model": args.model,
+        "pretrained": args.pretrained if not args.weights else "local-weights",
+        "device": args.device,
+        "referenceCount": len(references),
+    }
     return references, images, hashes, encoder, metadata
 
 
 def match_request(request, references, encoder):
-    if not isinstance(request, dict) or not isinstance(request.get("id"), str) or not 0 < len(request["id"]) <= 100:
+    """验证请求 ID、文件路径和 SHA-256 后，只解码本次读取并已核对的同一份字节。
+    上限 5 MiB、1600 万像素、单帧；不能核对后再次按路径打开，否则文件被替换会产生校验与使用竞态。
+    """
+    if (
+        not isinstance(request, dict)
+        or not isinstance(request.get("id"), str)
+        or not 0 < len(request["id"]) <= 100
+    ):
         raise ValueError("Invalid request ID")
     path, digest = request.get("path"), request.get("sha256")
-    if not isinstance(path, str) or len(path) > 4096 or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+    if (
+        not isinstance(path, str)
+        or len(path) > 4096
+        or not isinstance(digest, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", digest)
+    ):
         raise ValueError("Image path and SHA256 are required")
     from io import BytesIO
     from PIL import Image, ImageOps
+
     # Decode the exact bytes checked by the service. Never reopen an unchecked file.
     with open(path, "rb") as source:
         data = source.read(5 * 1024 * 1024 + 1)
@@ -161,6 +214,9 @@ def match_request(request, references, encoder):
 
 
 def serve(args):
+    """运行 JSON 行协议；模型加载信息重定向到 stderr，stdout 只保留可解析协议帧。
+    服务端用请求 ID 关联结果，不能依赖日志顺序或把模型输出当作触发授权。
+    """
     with contextlib.redirect_stdout(sys.stderr):
         references, _, _, encoder, metadata = prepare_gallery(args)
     print(json.dumps({"type": "ready", **metadata}, ensure_ascii=False), flush=True)
@@ -174,8 +230,14 @@ def serve(args):
                 result = match_request(request, references, encoder)
         except Exception:
             result = {"status": "unavailable", "trigger": False}
-        print(json.dumps({"id": request.get("id") if isinstance(request, dict) else None,
-                          "result": result}, ensure_ascii=False, allow_nan=False), flush=True)
+        print(
+            json.dumps(
+                {"id": request.get("id") if isinstance(request, dict) else None, "result": result},
+                ensure_ascii=False,
+                allow_nan=False,
+            ),
+            flush=True,
+        )
 
 
 def run(args):
@@ -183,18 +245,25 @@ def run(args):
     if args.command == "match":
         image = read_image(args.image, args.crop)
         features = encoder.encode([image])[0]
-        return {**match_features(features, references, args.threshold, args.exclude_reference),
-                **metadata, "imageSha256": pixel_digest(image), "personaScope": "single-reply"}
+        return {
+            **match_features(features, references, args.threshold, args.exclude_reference),
+            **metadata,
+            "imageSha256": pixel_digest(image),
+            "personaScope": "single-reply",
+        }
 
     # Evaluate each positive against the other references, excluding exact pixel duplicates.
     rows = []
     for index, ref in enumerate(references):
-        exclude = {other["id"] for other, digest in zip(references, hashes) if digest == hashes[index]}
+        exclude = {
+            other["id"] for other, digest in zip(references, hashes) if digest == hashes[index]
+        }
         original = match_features(ref["features"], references, args.threshold, exclude)
         # JPEG loss and downscaling are real image preprocessing probes, not claims
         # about unseen characters or negative classification accuracy.
         from io import BytesIO
         from PIL import Image
+
         thumbnail = images[index].copy()
         thumbnail.thumbnail((96, 96))
         buffer = BytesIO()
@@ -203,30 +272,47 @@ def run(args):
         with Image.open(buffer) as compressed:
             changed = encoder.encode([compressed.convert("RGB")])[0]
         transformed = match_features(changed, references, args.threshold)
-        rows.append({"referenceId": ref["id"], "leaveOneOut": original,
-                     "downscaledJpeg": transformed})
+        rows.append(
+            {"referenceId": ref["id"], "leaveOneOut": original, "downscaledJpeg": transformed}
+        )
 
     negatives = []
     for path in args.negative:
         image = read_image(path)
-        negatives.append({"image": Path(path).name,
-                          **match_features(encoder.encode([image])[0], references, args.threshold)})
+        negatives.append(
+            {
+                "image": Path(path).name,
+                **match_features(encoder.encode([image])[0], references, args.threshold),
+            }
+        )
     # Simple color controls catch gross false triggers but are not character negatives.
     from PIL import Image
+
     controls = []
     for color in ["white", "black", "yellow", "green"]:
         features = encoder.encode([Image.new("RGB", (224, 224), color)])[0]
-        controls.append({"control": "solid-" + color,
-                         **match_features(features, references, args.threshold)})
-    return {"status": "ok", **metadata, "threshold": args.threshold,
-            "calibrated": False, "positiveCount": len(rows),
-            "leaveOneOutTriggers": sum(row["leaveOneOut"]["trigger"] for row in rows),
-            "downscaledJpegTriggers": sum(row["downscaledJpeg"]["trigger"] for row in rows),
-            "negativeCount": len(negatives), "negativeFalseTriggers": sum(row["trigger"] for row in negatives),
-            "colorControls": controls, "results": rows, "negatives": negatives,
-            "limitations": ["Positive samples alone cannot establish false positive rate.",
-                             "Cosine similarity is not a calibrated probability.",
-                             "No WeChat messages or external image uploads were performed."]}
+        controls.append(
+            {"control": "solid-" + color, **match_features(features, references, args.threshold)}
+        )
+    return {
+        "status": "ok",
+        **metadata,
+        "threshold": args.threshold,
+        "calibrated": False,
+        "positiveCount": len(rows),
+        "leaveOneOutTriggers": sum(row["leaveOneOut"]["trigger"] for row in rows),
+        "downscaledJpegTriggers": sum(row["downscaledJpeg"]["trigger"] for row in rows),
+        "negativeCount": len(negatives),
+        "negativeFalseTriggers": sum(row["trigger"] for row in negatives),
+        "colorControls": controls,
+        "results": rows,
+        "negatives": negatives,
+        "limitations": [
+            "Positive samples alone cannot establish false positive rate.",
+            "Cosine similarity is not a calibrated probability.",
+            "No WeChat messages or external image uploads were performed.",
+        ],
+    }
 
 
 def main():
@@ -245,7 +331,9 @@ def main():
     parser.add_argument("--pretrained", default=DEFAULT_PRETRAINED)
     parser.add_argument("--weights", help="Optional local OpenCLIP checkpoint path")
     parser.add_argument("--device", default="cpu", choices=["cpu", "cuda"])
-    parser.add_argument("--allow-download", action="store_true", help="Permit downloading public model weights")
+    parser.add_argument(
+        "--allow-download", action="store_true", help="Permit downloading public model weights"
+    )
     parser.add_argument("--output", help="Also save the JSON result at this path")
     args = parser.parse_args()
     if args.command == "match" and not args.image:
@@ -269,8 +357,11 @@ def main():
         print(output)
         return 0
     except Exception as error:
-        print(json.dumps({"status": "unavailable", "trigger": False,
-                          "error": str(error)}, ensure_ascii=False))
+        print(
+            json.dumps(
+                {"status": "unavailable", "trigger": False, "error": str(error)}, ensure_ascii=False
+            )
+        )
         return 2
 
 

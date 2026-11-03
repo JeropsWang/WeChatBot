@@ -1,5 +1,15 @@
 {
-  "compilerOptions": { "target": "ES2023", "module": "NodeNext", "moduleResolution": "NodeNext", "strict": true, "noEmit": true, "esModuleInterop": true, "skipLibCheck": true, "resolveJsonModule": true, "types": ["node", "vitest/globals"] },
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "types": ["node", "vitest/globals"]
+  },
   "include": ["apps/server/**/*.ts", "packages/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts"],
   "exclude": ["node_modules", "apps/web", "data"]
 }

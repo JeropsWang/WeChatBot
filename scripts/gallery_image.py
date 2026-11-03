@@ -1,4 +1,5 @@
 """Decode and normalize a static gallery upload without loading the model."""
+
 import json
 import sys
 from pathlib import Path
@@ -6,6 +7,10 @@ from PIL import Image, ImageOps
 
 
 def normalize(source, output, thumbnail, mime, crop=None):
+    """校验静态 PNG/JPEG/WebP 的实际内容、帧数和像素上限，再生成规范 PNG 与缩略图。
+    Image.open 是惰性解码，load 强制在关闭源文件前发现解码错误；exif_transpose 按方向信息旋转后转 RGB。
+    完整规范图先保存，crop 只影响缩略预览；thumbnail 原地保持比例缩小，不会放大。此过程不加载模型或联网。
+    """
     expected = {'image/png': 'PNG', 'image/jpeg': 'JPEG', 'image/webp': 'WEBP'}
     with Image.open(source) as image:
         if mime not in expected or image.format != expected[mime]:
