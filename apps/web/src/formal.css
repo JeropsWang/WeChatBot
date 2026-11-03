@@ -1,5 +1,10 @@
-/* 正式版主题覆盖：保留共用基础组件样式。 */
+/* Approved warm stone / ink blue / terracotta. Original rules remain untouched. */
 .formal-breadcrumb,.run-state{display:none}
+.appearance-picker{display:flex;align-items:center;gap:8px;font-size:13px;white-space:nowrap}
+.appearance-picker select{color:inherit;background:transparent;border:1px solid currentColor;border-radius:6px;padding:9px 25px 9px 10px;min-height:40px}
+.appearance-picker option{color:#272e31;background:#e7e0d5}
+[data-ui="original"] .persona-advanced{display:contents}
+[data-ui="original"] .persona-advanced>summary{display:none}
 [hidden]{display:none!important}
 
 :root[data-ui="formal"]{
@@ -31,6 +36,8 @@
 [data-ui="formal"] .run-state{display:flex;align-items:center;gap:10px;font-size:13px;white-space:nowrap}
 [data-ui="formal"] .run-state svg{box-sizing:content-box;padding:9px;background:#d8d0c4;border-radius:50%}
 [data-ui="formal"] .topbar .global-pause.button{color:var(--ink);background:transparent;border:1px solid #987460;min-height:42px;padding:9px 16px;font-size:14px}
+[data-ui="formal"] .appearance-picker{border-left:1px solid var(--line);padding-left:18px}
+[data-ui="formal"] .appearance-picker select{border-color:var(--line);min-width:100px}
 [data-ui="formal"] .topbar .account-button{background:transparent;color:var(--muted);width:36px!important;height:36px!important}
 [data-ui="formal"] .sidebar{background:var(--nav);top:var(--header-height);padding:26px 14px 24px;color:#e8e1d7}
 [data-ui="formal"] .sidebar nav{position:relative;gap:0}
@@ -138,6 +145,7 @@
 [data-ui="formal"] .overview-status{grid-column:1;grid-row:9;border-top:1px solid var(--line);padding-top:20px;margin:0;gap:16px}
 [data-ui="formal"] .overview-status>button{color:var(--muted);font-size:12px}
 [data-ui="formal"] .ordinary-page .persona-editor>.notice{grid-column:1;grid-row:10}
+[data-ui="formal"] .ordinary-page .portrait-panel{display:none}
 [data-ui="formal"] .ordinary-page .preview-section{grid-column:2;grid-row:1/span 10;position:sticky;top:110px;margin:0;background:var(--preview);color:var(--preview-text);padding:24px 22px 18px;border-radius:12px;min-height:530px;height:calc(100dvh - 150px);max-height:860px;display:flex;flex-direction:column;overflow:hidden}
 [data-ui="formal"] .preview-section>.section-title{padding-bottom:20px;border-bottom:1px solid #627079;gap:10px;margin:0}
 [data-ui="formal"] .preview-section h2{display:flex;align-items:center;gap:10px;font-size:18px;font-weight:500}
@@ -164,6 +172,7 @@
 @keyframes preview-reveal{from{opacity:.4;transform:translateY(-5px)}to{opacity:1;transform:translateY(0)}}
 [data-ui="formal"] .auth-layout{background:var(--stone);display:block}
 [data-ui="formal"] .auth-content{max-width:650px;padding:70px 45px;margin:auto}
+[data-ui="formal"] .auth-portrait{display:none}
 [data-ui="formal"] .auth-star{color:var(--accent)}
 
 /* Shared typography and spacing roles for all formal surfaces. */
@@ -239,6 +248,13 @@
   [data-ui="formal"] .sidebar{top:var(--header-height)}
 }
 @media(max-width:600px){
+  [data-ui="original"] .topbar{gap:10px}
+  [data-ui="original"] .brand{gap:8px}
+  [data-ui="original"] .brand strong{font-size:18px}
+  [data-ui="original"] .brand>svg{width:24px}
+  [data-ui="original"] .header-tools{gap:8px}
+  [data-ui="original"] .appearance-picker>span{display:none}
+  [data-ui="original"] .appearance-picker select{width:78px;min-width:0;padding:8px 4px;font-size:12px}
   :root[data-ui="formal"]{--header-height:68px}
   [data-ui="formal"] .topbar{padding:0 12px;gap:8px;flex-wrap:nowrap;height:68px}
   [data-ui="formal"] .brand{width:auto;background:transparent;color:var(--ink);padding:0;height:auto;gap:7px}
@@ -246,6 +262,9 @@
   [data-ui="formal"] .brand strong{font-size:15px}
   [data-ui="formal"] .header-tools{gap:7px}
   [data-ui="formal"] .run-state{display:none}
+  [data-ui="formal"] .appearance-picker{padding:0;border:0}
+  [data-ui="formal"] .appearance-picker>span{display:none}
+  [data-ui="formal"] .appearance-picker select{min-width:0;width:78px;font-size:12px;padding:8px 4px;min-height:40px}
   [data-ui="formal"] .topbar .global-pause.button{display:inline-flex;position:fixed;right:14px;top:79px;z-index:31;font-size:12px;min-height:36px;padding:6px 10px;background:var(--stone)}
   [data-ui="formal"] .topbar .account-button{width:28px!important;height:30px!important}
   [data-ui="formal"] .mobile-menu{margin:12px 18px;min-height:36px;font-size:13px;width:calc(100% - 36px)}
@@ -269,9 +288,11 @@
 @media(min-width:601px) and (max-width:900px){
   [data-ui="formal"] .run-state{display:none}
   [data-ui="formal"] .topbar{gap:16px;padding-right:16px}
+  [data-ui="formal"] .appearance-picker{padding-left:10px}
 }
-@media(max-width:1100px){}
+@media(max-width:1100px){[data-ui="original"] .header-clock{display:none}}
 @media(prefers-reduced-motion:reduce){
   [data-ui="formal"] *,[data-ui="formal"] *:before{animation:none!important;transition:none!important;scroll-behavior:auto!important}
   [data-ui="formal"] button:active:not(:disabled){translate:none}
 }
+[data-ui="original"] .hunt-member-add{display:contents}

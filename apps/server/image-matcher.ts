@@ -34,7 +34,7 @@ export class LocalImageMatcher implements ImageMatcher {
   if(this.ready)return Promise.resolve();if(this.starting)return this.starting;
   this.starting=new Promise<void>((done,reject)=>{
    this.rejectStart=reject;
-   const child=spawn(this.options.python??resolve('.venv-image-match/Scripts/python.exe'),[this.options.script??resolve('scripts/image_match.py'),'serve','--manifest',this.options.manifest??resolve('data/image-match/references.json')],{windowsHide:true,stdio:['pipe','pipe','pipe'],env:{...process.env,PYTHONUTF8:'1',HF_HUB_OFFLINE:'1',HF_HUB_DISABLE_IMPLICIT_TOKEN:'1'}});
+   const child=spawn(this.options.python??resolve(process.platform==='win32'?'.venv-image-match/Scripts/python.exe':'.venv-image-match/bin/python'),[this.options.script??resolve('scripts/image_match.py'),'serve','--manifest',this.options.manifest??resolve('data/image-match/references.json')],{windowsHide:true,stdio:['pipe','pipe','pipe'],env:{...process.env,PYTHONUTF8:'1',HF_HUB_OFFLINE:'1',HF_HUB_DISABLE_IMPLICIT_TOKEN:'1'}});
    this.child=child;let buffer='';
    const timer=setTimeout(()=>this.fail(new Error('图像匹配模型加载超时')),this.options.startupTimeoutMs??90000);
    const startDone=()=>{clearTimeout(timer);this.rejectStart=undefined;done();};
